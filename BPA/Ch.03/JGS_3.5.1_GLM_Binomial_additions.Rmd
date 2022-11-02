@@ -1,0 +1,216 @@
+---
+title: "JGS_GLM_Poisson_simulate_data"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+
+```
+
+## Simulate count data 
+
+```{r}
+
+# simulation
+
+simData <- function(n = 40,
+                    alpha = 0,
+                    beta1 = -0.1,
+                    beta2 = -0.9){
+
+
+  data <- tibble(year = 1:n) %>%
+    mutate(yr = (year - round(n / 2)) / (n / 2),
+           yr2 = yr^2,
+           N = round(runif(n, min = 20, max = 100)),
+           alpha = alpha,
+           beta1 = beta1,
+           beta2 = beta2,
+           logit_expected_p = alpha + beta1 * yr + beta2 * yr2,
+           expected_p = plogis(logit_expected_p),
+           C = rbinom(n = n, size = N, prob = expected_p))
+
+
+  return(data)
+
+}
+
+
+data <- simData()
+
+
+```
+
+## Plot simulated counts
+
+```{r}
+
+ggplot(data, aes(year, C/N)) +
+  geom_path()
+
+```
+
+## Model simulated counts using brm
+
+```{r}
+
+m_brm <- brm(C | trials(N) ~ 1 + yr + yr2,
+             data = data,
+             family = binomial())
+
+
+m_brm
+
+
+```
+
+```{r}
+
+stancode(m_brm$fit)
+
+```
+
+
+```{r}
+
+preds <- data %>%
+  select(year, yr, yr2) %>%
+  mutate(N = 1) %>%
+  add_epred_draws(m_brm)
+
+
+ggplot(preds, aes(year, .epred)) +
+  stat_lineribbon(alpha = 0.25, fill = "red") +
+  geom_line(data = data, aes(year, C/N))
+
+```
+
+
+```{r}
+
+m_ret <- ulam(
+  
+  alist(C ~ dbinom(N, p),
+        logit(p) <- a + b1 * yr + b2 * yr2,
+        a ~ dnorm(0, 2.5),
+        b1 ~ dnorm(0, 2),
+        b2 ~ dnorm(0, 2)),
+  data = data, 
+  chains = 2,
+  iter = 1000
+  
+)
+
+m_ret
+precis(m_ret)
+traceplot(m_ret)
+
+```
+
+```{r}
+
+m_ret2 <- map2stan(
+  
+  alist(C ~ dpois(lambda),
+        log(lambda) <- a + b1 * yr + b2 * yr2 + b3 * yr3,
+        a ~ dnorm(0, 5),
+        b1 ~ dnorm(0, 2),
+        b2 ~ dnorm(0, 2),
+        b3 ~ dnorm(0, 2)),
+  data = data
+  
+)
+
+summary(m_ret2)
+stancode(m_ret2)
+
+```
+
+```{r}
+
+data_real <- read_rdump("GLM_Poisson.data.R")
+
+data <- tibble(yr = data_real$year,
+               yr2 = yr^2,
+               yr3 = yr^3,
+               C = data_real$C)
+
+m_per <- ulam(
+  
+  alist(C ~ dpois(lambda),
+        log(lambda) <- a + b1 * yr + b2 * yr2 + b3 * yr3,
+        a ~ dnorm(0, 5),
+        b1 ~ dnorm(0, 2),
+        b2 ~ dnorm(0, 2),
+        b3 ~ dnorm(0, 2)),
+  data = data, 
+  chains = 2,
+  iter = 1000
+  
+)
+
+m_per
+precis(m_per)
+traceplot(m_per)
+
+post <- extract.samples(m_per, n = 1000)
+
+pr <- link(m_per) 
+
+
+```
+
+## Model nestlings
+
+```{r}
+
+data_real <- read_rdump("GLM_Binomial.data.R")
+
+data <- tibble(yr = data_real$year,
+               yr2 = yr^2,
+               yr3 = yr^3,
+               C = data_real$C)
+
+m_eye <- ulam(
+  
+  alist(C ~ dpois(lambda),
+        log(lambda) <- a + b1 * yr + b2 * yr2 + b3 * yr3,
+        a ~ dnorm(0, 5),
+        b1 ~ dnorm(0, 2),
+        b2 ~ dnorm(0, 2),
+        b3 ~ dnorm(0, 2)),
+  data = data, 
+  chains = 2,
+  iter = 1000
+  
+)
+
+m_eye
+precis(m_eye)
+traceplot(m_eye)
+
+pr <- link(m_per) %>%
+  data.frame() %>%
+  pivot_longer(1:40) %>%
+  mutate(name = as.integer(str_remove(name, "X")))
+
+
+ggplot(pr, aes(name, value)) +
+  stat_lineribbon(alpha = 0.25, fill = "red")
+
+
+```
+
