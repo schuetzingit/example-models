@@ -1,0 +1,160 @@
+---
+title: "JGS_GLMM_Poisson_simulate_data"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+
+```
+
+## Simulate count data 
+
+```{r}
+
+# simulation
+
+simData <- function(n_site = 20,
+                    n_year = 40,
+                    alpha = 4.18456,
+                    beta1 = 1.90672,
+                    beta2 = 0.10852,
+                    beta3 = -1.17121,
+                    sd_site = 0.3,
+                    sd_year = 0.2){
+
+
+  site_effects <- tibble(site = 1:n_site) %>%
+    mutate(alpha_site = rnorm(n_site, mean = alpha, sd = sd_site))
+  
+  
+  year_effects <- tibble(year = 1:n_year) %>%
+    mutate(yr = (year - 20) / 20,
+           eps_year = rnorm(n_year, mean = 0, sd = sd_year))
+  
+  
+  data <- site_effects %>%
+    merge(year_effects) %>%
+    mutate(yr2 = yr^2,
+           yr3 = yr^3,
+           beta1 = beta1,
+           beta2 = beta2,
+           beta3 = beta3,
+           log_expected_count = alpha_site + beta1 * yr + beta2 * yr2 + beta3 * yr3 + eps_year,
+           expected_count = exp(log_expected_count),
+           C = rpois(n = n_year * n_site, lambda = expected_count))
+
+
+  return(data)
+
+}
+
+
+data <- simData()
+
+```
+
+## Plot simulated counts
+
+```{r}
+
+
+ggplot(data, aes(yr, C, color = factor(site))) +
+  geom_path() +
+  guides(color = "none")
+
+
+```
+
+## Model simulated counts using brm
+
+```{r}
+
+m_brm <- brm(C ~ yr + yr2 + yr3 + (1|yr) + (1|site),
+             data = data,
+             family = poisson())
+
+
+m_brm
+
+
+```
+
+```{r}
+
+stancode(m_brm$fit)
+
+```
+
+
+```{r}
+
+preds <- data %>%
+  add_epred_draws(m_brm)
+
+
+ggplot(preds, aes(year, .epred)) +
+  stat_lineribbon(alpha = 0.25, fill = "red") +
+  geom_line(aes(year, C, group = site), lwd = 0.1) +
+  theme(aspect.ratio = 1)
+
+```
+
+
+```{r}
+
+m_ret <- ulam(
+  
+  alist(C ~ dpois(lambda),
+        log(lambda) <- a[site] + b1 * yr + b2 * yr2 + b3 * yr3 + e[year],
+        a[site] ~ dnorm(abar, asigma),
+        e[year] ~ dnorm(0, esigma),
+        b1 ~ dnorm(0, 2),
+        b2 ~ dnorm(0, 2),
+        b3 ~ dnorm(0, 2),
+        abar ~ dnorm(4, 4),
+        asigma ~ dexp(1),
+        esigma ~ dexp(1)),
+  data = data, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+m_ret
+precis(m_ret)
+traceplot(m_ret, "abar", alpha = 0.5)
+trankplot(m_ret, bg = col.alpha("black",0.15))
+stancode(m_ret)
+
+```
+
+```{r}
+
+pr <- link(m_ret) %>%
+  data.frame() %>%
+  pivot_longer(1:40) %>%
+  mutate(name = as.integer(str_remove(name, "X")))
+
+
+ggplot(pr, aes(name, value)) +
+  stat_lineribbon(alpha = 0.25, fill = "red", color = "brown") +
+  geom_line(data = data, aes(1:40, C)) +
+  theme(aspect.ratio = 1)
+
+
+```
+
+

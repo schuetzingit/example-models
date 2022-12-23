@@ -59,7 +59,9 @@ data <- simData()
 ```{r}
 
 ggplot(data, aes(year, C/N)) +
-  geom_path()
+  geom_path() +
+  theme(aspect.ratio = 1)
+
 
 ```
 
@@ -94,7 +96,8 @@ preds <- data %>%
 
 ggplot(preds, aes(year, .epred)) +
   stat_lineribbon(alpha = 0.25, fill = "red") +
-  geom_line(data = data, aes(year, C/N))
+  geom_line(data = data, aes(year, C/N)) +
+  theme(aspect.ratio = 1)
 
 ```
 
@@ -120,42 +123,23 @@ traceplot(m_ret)
 
 ```
 
-```{r}
-
-m_ret2 <- map2stan(
-  
-  alist(C ~ dpois(lambda),
-        log(lambda) <- a + b1 * yr + b2 * yr2 + b3 * yr3,
-        a ~ dnorm(0, 5),
-        b1 ~ dnorm(0, 2),
-        b2 ~ dnorm(0, 2),
-        b3 ~ dnorm(0, 2)),
-  data = data
-  
-)
-
-summary(m_ret2)
-stancode(m_ret2)
-
-```
 
 ```{r}
 
-data_real <- read_rdump("GLM_Poisson.data.R")
+data_real <- read_rdump("GLM_Binomial.data.R")
 
 data <- tibble(yr = data_real$year,
                yr2 = yr^2,
-               yr3 = yr^3,
-               C = data_real$C)
+               C = data_real$C,
+               N = data_real$N)
 
 m_per <- ulam(
   
-  alist(C ~ dpois(lambda),
-        log(lambda) <- a + b1 * yr + b2 * yr2 + b3 * yr3,
+  alist(C ~ dbinom(N, p),
+        logit(p) <- a + b1 * yr + b2 * yr2,
         a ~ dnorm(0, 5),
         b1 ~ dnorm(0, 2),
-        b2 ~ dnorm(0, 2),
-        b3 ~ dnorm(0, 2)),
+        b2 ~ dnorm(0, 2)),
   data = data, 
   chains = 2,
   iter = 1000
@@ -168,39 +152,6 @@ traceplot(m_per)
 
 post <- extract.samples(m_per, n = 1000)
 
-pr <- link(m_per) 
-
-
-```
-
-## Model nestlings
-
-```{r}
-
-data_real <- read_rdump("GLM_Binomial.data.R")
-
-data <- tibble(yr = data_real$year,
-               yr2 = yr^2,
-               yr3 = yr^3,
-               C = data_real$C)
-
-m_eye <- ulam(
-  
-  alist(C ~ dpois(lambda),
-        log(lambda) <- a + b1 * yr + b2 * yr2 + b3 * yr3,
-        a ~ dnorm(0, 5),
-        b1 ~ dnorm(0, 2),
-        b2 ~ dnorm(0, 2),
-        b3 ~ dnorm(0, 2)),
-  data = data, 
-  chains = 2,
-  iter = 1000
-  
-)
-
-m_eye
-precis(m_eye)
-traceplot(m_eye)
 
 pr <- link(m_per) %>%
   data.frame() %>%
@@ -209,7 +160,9 @@ pr <- link(m_per) %>%
 
 
 ggplot(pr, aes(name, value)) +
-  stat_lineribbon(alpha = 0.25, fill = "red")
+  stat_lineribbon(alpha = 0.25, fill = "red") +
+  geom_line(data = data, aes(1:40, C/N)) +
+  theme(aspect.ratio = 1)
 
 
 ```

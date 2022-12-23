@@ -1,0 +1,106 @@
+---
+title: "JGS_GLMM_Poisson_simulate_data"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+
+```
+
+## Simulate data 
+
+```{r}
+
+n_years <- 25
+N1 <- 30
+mean_lambda <- 1.02
+sigma2_lambda <- 0.02
+sigma2_y <- 20
+
+y <- N <- numeric(n_years)
+N[1] <- N1
+lambda <- rnorm(n_years - 1, mean_lambda, sigma2_lambda ^ 0.5)
+
+for(t in 1:(n_years-1)){
+  
+  N[t+1] <- N[t] * lambda[t]
+  
+}
+
+N
+
+
+for(t in 1:n_years){
+  y[t] <- rnorm(1, N[t], sigma2_y ^ 0.5)
+}
+
+y
+
+```
+
+## Plot site counts through time
+
+```{r}
+
+
+ggplot() +
+  (aes(1:25, y)) +
+  geom_path() +
+  guides(color = "none")
+
+
+```
+
+## Model simulated counts 
+
+```{r}
+
+data_ret <- tibble(t = 1:25, y = y, N = N)
+
+m1_ret <- ulam(
+  
+  alist(
+    
+        y ~ normal(N_est, sigma_obs),
+        lambda ~ normal(mean_lambda, sigma_proc),
+        
+        transpars> vector[N]:N_est
+        transpars> N_est[1] <- N_est
+          
+          vector<lower=0>[T] N_est;
+
+  N_est[1] = N_est1;
+  // State process
+  for (t in 1 : (T - 1)) {
+    N_est[t + 1] = N_est[t] * lambda[t];
+        
+,
+        a ~ dnorm(0, 2)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m1_ret)
+traceplot(m1_ret, "a", alpha = 0.5)
+trankplot(m1_ret, bg = col.alpha("black",0.15))
+stancode(m1_ret)
+
+get_variables(ssm)
+
+```

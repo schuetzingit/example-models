@@ -1,0 +1,260 @@
+---
+title: "JGS_GLMM_Poisson_simulate_data"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+
+```
+
+## Get data 
+
+```{r}
+
+tits <- read_delim("tits.txt") %>%
+  pivot_longer(cols = 5:31) %>%
+  mutate(year = as.integer(str_sub(name, -4, -1)),
+         type = str_sub(name, 1, -5)) %>%
+  select(site, elevation, forest, year, value, type) %>%
+  pivot_wider(id_cols = 1:4, values_from = "value", names_from = "type") %>%
+  mutate(obs = as.character(obs),
+         site_i = as.integer(as.factor(site)),
+         year_j = year - (min(year) - 1)) %>%
+  replace_na(list(obs = "272", first = 0))
+  
+
+tits
+
+```
+
+## Plot site counts through time
+
+```{r}
+
+
+ggplot(tits, aes(year, y, color = factor(site))) +
+  geom_path() +
+  guides(color = "none")
+
+
+```
+
+## Model simulated counts using brm
+
+```{r}
+
+m1_brm <- brm(y ~ 1,
+             data = tits,
+             family = poisson(),
+             prior = prior(normal(0, 2), class = Intercept))
+
+
+m1_brm
+
+
+```
+
+
+```{r}
+
+tits_ret <- tits %>%
+  select(y) %>%
+  drop_na()
+
+m1_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- a,
+        a ~ dnorm(0, 2)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m1_ret)
+traceplot(m1_ret, "a", alpha = 0.5)
+trankplot(m1_ret, bg = col.alpha("black",0.15))
+stancode(m1_ret)
+
+```
+
+```{r}
+
+m2_brm <- brm(y ~ 0 + site,
+             data = tits,
+             family = poisson(),
+             prior = prior(normal(0, 2), class = b))
+
+
+m2_brm
+
+
+```
+
+```{r}
+
+tits_ret <- tits %>%
+  select(y, site_i) %>%
+  drop_na(y)
+
+m2_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- a[site_i],
+        a[site_i] ~ dnorm(0, 2)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m2_ret, depth = 2)
+traceplot(m1_ret, "a", alpha = 0.5)
+trankplot(m1_ret, bg = col.alpha("black",0.15))
+
+
+```
+
+```{r}
+
+tits_ret <- tits %>%
+  select(y, year_j) %>%
+  drop_na(y)
+
+m3_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- a[year_j],
+        a[year_j] ~ dnorm(0, 2)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m3_ret, depth = 2)
+traceplot(m3_ret, alpha = 0.5)
+trankplot(m3_ret, bg = col.alpha("black",0.15))
+
+
+```
+```{r}
+
+tits_ret <- tits %>%
+  select(y, year_j, site_i) %>%
+  drop_na(y)
+
+m4_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- s[site_i],
+        s[site_i] ~ dnorm(s_bar, s_sigma),
+        s_bar ~ dnorm(0, 2),
+        s_sigma ~ dexp(1)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m4_ret, depth = 2)
+traceplot(m4_ret, c("s_bar", "s_sigma"), alpha = 0.5)
+trankplot(m4_ret, pars = c("s_bar", "s_sigma"))
+
+
+```
+
+```{r}
+
+m5_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- y_re[year_j],
+        y_re[year_j] ~ dnorm(y_bar, y_sigma),
+        y_bar ~ dnorm(0, 2),
+        y_sigma ~ dexp(1)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m5_ret, depth = 2)
+traceplot(m5_ret, c("y_bar", "y_sigma"), alpha = 0.5)
+trankplot(m5_ret, pars = c("y_bar", "y_sigma"))
+
+```
+
+```{r}
+
+m6_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- a + y_re[year_j] + s_re[site_i],
+        a ~ dnorm(0, 2),
+        y_re[year_j] ~ dnorm(0, y_sigma),
+        y_sigma ~ dexp(1),
+        s_re[site_i] ~ dnorm(0, s_sigma),
+        s_sigma ~ dexp(1)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m6_ret, depth = 2)
+traceplot(m5_ret, c("y_bar", "y_sigma"), alpha = 0.5)
+trankplot(m5_ret, pars = c("y_bar", "y_sigma"))
+
+```
+
+```{r}
+
+tits_ret <- tits %>%
+  select(y, year_j, site_i, first) %>%
+  drop_na(y) 
+
+
+m7_ret <- ulam(
+  
+  alist(y ~ dpois(lambda),
+        log(lambda) <- a + y_re[year_j] + s_re[site_i] + b1 * first,
+        a ~ dnorm(0, 2),
+        b1 ~ dnorm(0, 1),
+        y_re[year_j] ~ dnorm(0, y_sigma),
+        y_sigma ~ dexp(1),
+        s_re[site_i] ~ dnorm(0, s_sigma),
+        s_sigma ~ dexp(1)),
+  data = tits_ret, 
+  chains = 3,
+  iter = 2000
+  
+)
+
+
+precis(m7_ret, depth = 2)
+traceplot(m5_ret, c("y_bar", "y_sigma"), alpha = 0.5)
+trankplot(m5_ret, pars = c("y_bar", "y_sigma"))
+
+```
+
