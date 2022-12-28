@@ -1,0 +1,21 @@
+
+
+model {
+    
+  # priors
+    
+  alpha ~ dunif(-10, 10)
+  beta1 ~ dunif(-10, 10)
+  beta2 ~ dunif(-10, 10)
+    
+  # likelihood
+    
+  for(i in 1:N) {
+    
+    C[i] ~ dbin(p[i], trials[i])
+    logit(p[i]) <- logit.p[i]
+    logit.p[i] <- alpha + beta1 * year[i] + beta2 * pow(year[i], 2)
+      
+  }
+    
+}
