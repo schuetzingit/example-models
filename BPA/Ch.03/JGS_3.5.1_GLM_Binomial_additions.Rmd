@@ -170,6 +170,7 @@ plot(samples)
 
 preds <- samples[[2]][ , 4:43] %>%
   data.frame() %>%
+  mutate(mcmc = 1:1000) %>%
   pivot_longer(1:40) %>%
   mutate(year = as.integer(str_remove(name, "p.")))
 
@@ -177,6 +178,12 @@ preds <- samples[[2]][ , 4:43] %>%
 ggplot(preds, aes(year, value)) +
   stat_lineribbon(alpha = 0.25, fill = "red") +
   geom_line(data = data, aes(year, C/N))
+
+
+ggplot(preds, aes(year, value)) +
+  geom_line(aes(group = mcmc), alpha = 0.01) +
+  geom_line(data = data, aes(year, C/N))
+
 
 ```
 

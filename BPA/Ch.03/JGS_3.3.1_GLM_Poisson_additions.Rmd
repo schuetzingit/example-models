@@ -101,6 +101,9 @@ ggplot(preds, aes(year, .epred)) +
 
 ```{r}
 
+library(rjags)
+
+
 poisson_data <- list("C" = data$C,
                      "year" = data$yr,
                      "N" = 40)
