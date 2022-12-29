@@ -1,0 +1,41 @@
+
+
+model {
+    
+  # beta priors
+  
+  b1 ~ dnorm(0, 0.01)
+  b2 ~ dnorm(0, 0.01)
+  b3 ~ dnorm(0, 0.01)
+  
+  # site priors
+    
+  for (j in 1:n_sites) {
+    a[j] ~ dnorm(mu, a_tau)
+  }
+  
+  mu ~ dnorm(4, 0.1)
+  a_tau <- 1 / (a_sd * a_sd)
+  a_sd ~ dunif(0, 2)
+  
+  # year priors
+  
+  for (k in 1:n_years) {
+    e[k] ~ dnorm(0, e_tau)
+  }
+  
+  e_tau <- 1 / (e_sd * e_sd)
+  e_sd ~ dunif(0, 1)
+    
+  # likelihood
+    
+  for (i in 1:n_years) {
+
+    for (j in 1:n_sites) {
+      C[i, j] ~ dpois(lambda[i, j])
+      lambda[i, j] <- exp(log.lambda[i, j])
+      log.lambda[i, j] <- a[j] + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + e[i]
+    }
+  }
+    
+}

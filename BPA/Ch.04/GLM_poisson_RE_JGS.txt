@@ -1,0 +1,26 @@
+
+
+model {
+    
+  # priors
+    
+  a ~ dnorm(0, 0.05)
+  b1 ~ dnorm(0, 0.05)
+  b2 ~ dnorm(0, 0.05)
+  b3 ~ dnorm(0, 0.05)
+  tau <- 1 / (sd * sd)
+  sd ~ dexp(1)
+  
+    
+  # likelihood
+    
+  for(i in 1:N) {
+    
+    C[i] ~ dpois(lambda[i])
+    log(lambda[i]) <- log.lambda[i]
+    log.lambda[i] <- a + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + eps[i]
+    eps[i] ~ dnorm(0, tau)
+      
+  }
+    
+}
