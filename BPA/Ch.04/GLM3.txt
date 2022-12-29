@@ -1,0 +1,29 @@
+
+    
+    model {
+    
+      for (j in 1:n_sites) {
+      
+        a[j] ~ dnorm(a_bar, a_tau)
+      
+      }
+    
+      a_bar ~ dnorm(0, 0.01)
+      a_tau <- 1 / (a_sigma * a_sigma)
+      a_sigma ~ dunif(0, 3)
+
+
+      for (i in 1:n_years) {
+    
+        for (j in 1:n_sites) {
+    
+          C[i, j] ~ dpois(lambda[i, j])
+          log(lambda[i, j]) <- a[j] 
+    
+        }
+    
+      }
+    
+    }
+    
+    

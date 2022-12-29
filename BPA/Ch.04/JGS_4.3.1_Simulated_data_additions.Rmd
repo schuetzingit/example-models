@@ -27,7 +27,7 @@ library(rjags)
 
 # simulation
 
-simData <- function(n_site = 20,
+simData <- function(n_site = 60,
                     n_year = 40,
                     alpha = 4.18456,
                     beta1 = 1.90672,
@@ -122,14 +122,14 @@ d <- data %>%
   pivot_wider(names_from = site, values_from = C) %>%
   dplyr::select(-year) %>%
   as.matrix() %>%
-  array(dim = c(40, 20))
+  array(dim = c(40, 60))
 
 
 poisson_data <- list("C" = d,
-                     "year" = data$yr,
-                     "site" = data$site,
+                     "year" = (1:40 - 20) / 20,
+                     "site" = 1:60,
                      "n_years" = 40,
-                     "n_sites" = 20)
+                     "n_sites" = 60)
 
 
 sink("GLM_poisson_RE_site_year_JGS.txt")
@@ -146,19 +146,21 @@ model {
   
   # site priors
     
-  for (j in 1:n_sites) {
-    a[j] ~ dnorm(mu, a_tau)
-  }
+  #for (j in 1:n_sites) {
+  #  a[j] ~ dnorm(mu, a_tau)
+  #}
   
-  mu ~ dnorm(4, 0.1)
-  a_tau <- 1 / (a_sd * a_sd)
-  a_sd ~ dunif(0, 2)
+  #mu ~ dnorm(0, 0.01)
+  #a_tau <- 1 / (a_sd * a_sd)
+  #a_sd ~ dunif(0, 2)
+  
+  a ~ dnorm(0, 0.02)
   
   # year priors
   
-  for (k in 1:n_years) {
-    e[k] ~ dnorm(0, e_tau)
-  }
+  #for (i in 1:n_years) {
+  #  e[i] ~ dnorm(0, e_tau)
+ # }
   
   e_tau <- 1 / (e_sd * e_sd)
   e_sd ~ dunif(0, 1)
@@ -166,13 +168,16 @@ model {
   # likelihood
     
   for (i in 1:n_years) {
-
+    e[i] ~ dnorm(0, e_tau)
     for (j in 1:n_sites) {
+    
       C[i, j] ~ dpois(lambda[i, j])
-      lambda[i, j] <- exp(log.lambda[i, j])
-      log.lambda[i, j] <- a[j] + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + e[i]
+      log(lambda[i, j]) <- log.lambda[i, j]
+      log.lambda[i, j] <- a + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + e[i]
+    
     }
-  }
+  
+      }
     
 }", 
 
@@ -181,13 +186,13 @@ fill = TRUE)
 sink()
     
 
-poisson_inits <- function() list("mu" = runif(1, 0, 2), 
-                                 "a" = runif(20, -1, 1),
+poisson_inits <- function() list(#"mu" = runif(1, 0, 2), 
+                                 "a" = runif(1, -1, 1),
                                  "e" = runif(40, -1, 1),
                                  "b1" = runif(1, -1, 1), 
                                  "b2" = runif(1, -1, 1), 
                                  "b3" = runif(1, -1, 1),
-                                 "a_sd" = runif(1, 0, 0.1),
+                                 #"a_sd" = runif(1, 0, 0.1),
                                  "e_sd" = runif(1, 0, 0.1))
 
 
@@ -195,16 +200,16 @@ model <- jags.model("GLM_poisson_RE_site_year_JGS.txt",
                     data = poisson_data, 
                     inits = poisson_inits, 
                     n.chains = 2,
-                    n.adapt = 10000)
+                    n.adapt = 1000)
 
 
-update(model, n.iter = 50000)
+update(model, n.iter = 5000)
 
 
 samples <- coda.samples(model, 
-                        variable.names = c("mu", "a", "e", "b1", "b2", "b3", "a_sd", "e_sd"),
-                        n.iter = 50000,
-                        thin = 100)
+                        variable.names = c("a", "e", "b1", "b2", "b3", "e_sd"),
+                        n.iter = 5000,
+                        thin = 5)
 
 
 summary(samples)

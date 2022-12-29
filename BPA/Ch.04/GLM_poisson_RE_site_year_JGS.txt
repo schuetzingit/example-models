@@ -10,19 +10,21 @@ model {
   
   # site priors
     
-  for (j in 1:n_sites) {
-    a[j] ~ dnorm(mu, a_tau)
-  }
+  #for (j in 1:n_sites) {
+  #  a[j] ~ dnorm(mu, a_tau)
+  #}
   
-  mu ~ dnorm(4, 0.1)
-  a_tau <- 1 / (a_sd * a_sd)
-  a_sd ~ dunif(0, 2)
+  #mu ~ dnorm(0, 0.01)
+  #a_tau <- 1 / (a_sd * a_sd)
+  #a_sd ~ dunif(0, 2)
+  
+  a ~ dnorm(0, 0.02)
   
   # year priors
   
-  for (k in 1:n_years) {
-    e[k] ~ dnorm(0, e_tau)
-  }
+  #for (i in 1:n_years) {
+  #  e[i] ~ dnorm(0, e_tau)
+ # }
   
   e_tau <- 1 / (e_sd * e_sd)
   e_sd ~ dunif(0, 1)
@@ -30,12 +32,15 @@ model {
   # likelihood
     
   for (i in 1:n_years) {
-
+    e[i] ~ dnorm(0, e_tau)
     for (j in 1:n_sites) {
+    
       C[i, j] ~ dpois(lambda[i, j])
       lambda[i, j] <- exp(log.lambda[i, j])
-      log.lambda[i, j] <- a[j] + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + e[i]
+      log.lambda[i, j] <- a + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + e[i]
+    
     }
-  }
+  
+      }
     
 }
