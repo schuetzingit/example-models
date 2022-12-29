@@ -17,6 +17,7 @@ library(tidyverse)
 library(brms)
 library(rethinking)
 library(tidybayes)
+library(rjags)
 
 ```
 
@@ -112,6 +113,112 @@ ggplot(preds, aes(year, .epred)) +
 
 ```
 
+## jags
+
+```{r}
+
+d <- data %>%
+  dplyr::select(year, site, C) %>%
+  pivot_wider(names_from = site, values_from = C) %>%
+  dplyr::select(-year) %>%
+  as.matrix() %>%
+  array(dim = c(40, 20))
+
+
+poisson_data <- list("C" = d,
+                     "year" = data$yr,
+                     "site" = data$site,
+                     "n_years" = 40,
+                     "n_sites" = 20)
+
+
+sink("GLM_poisson_RE_site_year_JGS.txt")
+
+cat("
+
+model {
+    
+  # beta priors
+  
+  b1 ~ dnorm(0, 0.01)
+  b2 ~ dnorm(0, 0.01)
+  b3 ~ dnorm(0, 0.01)
+  
+  # site priors
+    
+  for (j in 1:n_sites) {
+    a[j] ~ dnorm(mu, a_tau)
+  }
+  
+  mu ~ dnorm(4, 0.1)
+  a_tau <- 1 / (a_sd * a_sd)
+  a_sd ~ dunif(0, 2)
+  
+  # year priors
+  
+  for (k in 1:n_years) {
+    e[k] ~ dnorm(0, e_tau)
+  }
+  
+  e_tau <- 1 / (e_sd * e_sd)
+  e_sd ~ dunif(0, 1)
+    
+  # likelihood
+    
+  for (i in 1:n_years) {
+
+    for (j in 1:n_sites) {
+      C[i, j] ~ dpois(lambda[i, j])
+      lambda[i, j] <- exp(log.lambda[i, j])
+      log.lambda[i, j] <- a[j] + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + e[i]
+    }
+  }
+    
+}", 
+
+fill = TRUE)
+
+sink()
+    
+
+poisson_inits <- function() list("mu" = runif(1, 0, 2), 
+                                 "a" = runif(20, -1, 1),
+                                 "e" = runif(40, -1, 1),
+                                 "b1" = runif(1, -1, 1), 
+                                 "b2" = runif(1, -1, 1), 
+                                 "b3" = runif(1, -1, 1),
+                                 "a_sd" = runif(1, 0, 0.1),
+                                 "e_sd" = runif(1, 0, 0.1))
+
+
+model <- jags.model("GLM_poisson_RE_site_year_JGS.txt", 
+                    data = poisson_data, 
+                    inits = poisson_inits, 
+                    n.chains = 2,
+                    n.adapt = 10000)
+
+
+update(model, n.iter = 50000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("mu", "a", "e", "b1", "b2", "b3", "a_sd", "e_sd"),
+                        n.iter = 50000,
+                        thin = 100)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+
+
+
+```
+
 
 ```{r}
 
@@ -134,7 +241,7 @@ m_ret <- ulam(
 )
 
 m_ret
-precis(m_ret)
+precis(m_ret, depth = 2)
 traceplot(m_ret, "abar", alpha = 0.5)
 trankplot(m_ret, bg = col.alpha("black",0.15))
 stancode(m_ret)

@@ -15,8 +15,9 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
 library(brms)
-library(rethinking)
+#library(rethinking)
 library(tidybayes)
+library(rjags)
 
 ```
 
@@ -97,6 +98,92 @@ ggplot(preds, aes(year, .epred)) +
   stat_lineribbon(alpha = 0.25, fill = "red") +
   geom_line(aes(year, C)) +
   theme(aspect.ratio = 1)
+
+```
+
+## jags
+
+```{r}
+
+
+poisson_data <- list("C" = data$C,
+                     "year" = data$yr,
+                     "N" = 40)
+
+
+sink("GLM_poisson_RE_JGS.txt")
+
+cat("
+
+model {
+    
+  # priors
+    
+  a ~ dnorm(0, 0.05)
+  b1 ~ dnorm(0, 0.05)
+  b2 ~ dnorm(0, 0.05)
+  b3 ~ dnorm(0, 0.05)
+  tau <- 1 / (sd * sd)
+  sd ~ dexp(1)
+  
+    
+  # likelihood
+    
+  for(i in 1:N) {
+    
+    C[i] ~ dpois(lambda[i])
+    log(lambda[i]) <- log.lambda[i]
+    log.lambda[i] <- a + b1 * year[i] + b2 * pow(year[i], 2) + b3 * pow(year[i], 3) + eps[i]
+    eps[i] ~ dnorm(0, tau)
+      
+  }
+    
+}", 
+
+fill = TRUE)
+
+sink()
+    
+
+poisson_inits <- function() list("a" = rnorm(1, 0, 0.05), 
+                                 "b1" = rnorm(1, 0, 0.05), 
+                                 "b2" = rnorm(1, 0, 0.05), 
+                                 "b3" = rnorm(1, 0, 0.05),
+                                 "sd" = rexp(1, 1))
+
+
+model <- jags.model("GLM_poisson_RE_JGS.txt", 
+                    data = poisson_data, 
+                    inits = poisson_inits, 
+                    n.chains = 4,
+                    n.adapt = 2000)
+
+
+update(model, n.iter = 10000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("a", "b1", "b2", "b3", "lambda", "sd", "eps"),
+                        n.iter = 1000)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+
+
+preds <- samples[[2]][ , 5:44] %>%
+  data.frame() %>%
+  pivot_longer(1:40) %>%
+  mutate(year = as.integer(str_remove(name, "lambda.")))
+
+
+
+
 
 ```
 
