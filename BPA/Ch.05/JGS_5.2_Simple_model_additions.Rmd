@@ -18,6 +18,7 @@ library(brms)
 library(rethinking)
 library(tidybayes)
 library(rjags)
+library(ggdist)
 
 ```
 
@@ -249,10 +250,12 @@ y
 
 N_data <- list(y = y, T = n_years)
 
-intis <- function() list(sigma.proc = runif(1, 0, 5),
+
+inits <- function() list(sigma.proc = runif(1, 0, 5),
                          mean.lambda = runif(1, 0.1, 2),
                          sigma.obs = runif(1, 0, 10),
                          N.est = c(runif(1, 30, 60), rep(NA, (n_years -1))))
+
 
 model <- jags.model("ssm_5.1.txt", 
                     data = N_data, 
@@ -282,6 +285,7 @@ x <- tidy_draws(samples) %>%
   pivot_longer(cols = 4:28, names_to = "year", values_to = "N.est") %>%
   mutate(year = as.integer(str_sub(year, 7, -2)))
 
+
 ggplot(x, aes(year, N.est)) +
   stat_lineribbon(aes(fill_ramp = stat(.width)), .width = ppoints(50), size = 0.25,
                   show.legend = F, fill = "#00B0F6", lty = 3) +
@@ -291,10 +295,122 @@ ggplot(x, aes(year, N.est)) +
 t <- tibble(year = 1:25, N, y)
 
 ggplot(x, aes(year, N.est)) +
-  stat_lineribbon(.width = c(0.95), alpha = 0.2) +
-  geom_line(data = t, aes(year, N)) +
+  stat_lineribbon(.width = c(0.95), alpha = 0.5, fill = "gray", size = 0.5) +
+  geom_line(data = t, aes(year, N), lty = 2) +
   geom_line(data = t, aes(year, y), color = "red")
 
+
+```
+
+```{r}
+
+sink("ssm_5.2.txt")
+
+cat("
+
+  model {
+    
+    # priors and constraints
+      
+    log.N.est[1]~ dnorm(5.6, 0.01)
+    mean.r ~ dnorm(1, 0.001)
+    sigma.proc ~ dunif(0, 1)
+    sigma2.proc <- pow(sigma.proc, 2)
+    tau.proc <- pow(sigma.proc, -2)
+    sigma.obs ~ dunif(0, 1)
+    sigma2.obs <- pow(sigma.obs, 2)
+    tau.obs <- pow(sigma.obs, -2)
+      
+      
+    # likelihood
+    # state process
+      
+    for (t in 1:(T-1)) {
+      r[t] ~ dnorm(mean.r, tau.proc)
+      log.N.est[t+1] <- log.N.est[t] + r[t]
+    }
+      
+      
+    # observation process
+      
+    for (t in 1:T) {
+      y[t] ~ dnorm(log.N.est[t], tau.obs)
+    }
+      
+      
+    # population sizes on real scale
+      
+    for (t in 1:T) {
+      N.est[t] <- exp(log.N.est[t])
+    }
+      
+  }",
+fill = TRUE)
+
+sink()
+
+
+p_years <- 6 
+
+hm <- c(271, 261, 309, 318, 231, 216, 208, 226, 195, 226, 233,
+        209, 226, 192, 191, 225, 245, 205, 191, 174, rep(NA, 6))
+
+year <- 1990:(2009 + p_years)
+
+
+N_data <- list(y = log(hm), T = length(year))
+
+
+inits <- function() list(sigma.proc = runif(1, 0, 1),
+                         mean.r = runif(1),
+                         sigma.obs = runif(1, 0, 1),
+                         log.N.est = c(rnorm(1, 5.6, 0.1), rep(NA, length(year) - 1)))
+
+
+model <- jags.model("ssm_5.2.txt", 
+                    data = N_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 100000)
+
+
+update(model, n.iter = 150000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("r", "mean.r", "sigma2.proc", 
+                                           "sigma2.obs", "N.est"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+x <- tidy_draws(samples) %>%
+  dplyr::select(1:29) %>%
+  pivot_longer(cols = 4:29, names_to = "year", values_to = "N.est") %>%
+  mutate(year = as.integer(str_sub(year, 7, -2)))
+
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(aes(fill_ramp = stat(.width)), .width = ppoints(50), size = 0.25,
+                  show.legend = F, fill = "#00B0F6", lty = 3) +
+  scale_fill_ramp_continuous(range = c(1, 0), from = rgb(1, 1, 1, alpha = 0))
+
+
+t <- tibble(year = 1:26, hm)
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(.width = c(0.95), alpha = 0.5, fill = "gray", size = 0.5) +
+  geom_line(data = t, aes(year, hm), lty = 2) 
+
+
+cv.obs <- sqrt(0.006041) / log(227.6)
+cv.proc <- sqrt(0.011853) / 0.021670
 
 ```
 

@@ -1,0 +1,26 @@
+
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    p ~ dunif(0, 1)
+      
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+        
+      for (j in 1:T) {
+        yaug[i, j] ~ dbern(p.eff[i, j])
+        p.eff[i, j] <- z[i] * p
+      }
+        
+    }
+      
+    N <- sum(z[])
+  
+  }

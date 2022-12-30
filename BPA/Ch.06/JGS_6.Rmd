@@ -1,0 +1,140 @@
+---
+title: "JGS_6"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+library(rjags)
+library(ggdist)
+
+```
+
+## Simulate count data 
+
+```{r}
+
+# simulation
+
+simData <- function(N = 100,
+                    p = 0.2,
+                    T = 3){
+
+  yfull <- yobs <- array(NA, dim = c(N, T))
+  
+  for (j in 1:T) {
+    yfull[ , j] <- rbinom(n = N, size = 1, prob = p)
+  }
+  
+  everdetected <- apply(yfull, 1, max)
+  
+  C <- sum(everdetected)
+  
+  yobs <- yfull[everdetected == 1, ]
+  
+  cat(C, "out of", N, "animals present were detected.\n")
+  
+  return(list(N = N,
+              p = p,
+              C = C,
+              T = T,
+              yfull = yfull,
+              yobs = yobs))
+
+}
+
+
+data <- simData()
+
+```
+
+# data augmentaion
+
+```{r}
+
+nz <- 250
+
+yaug <- rbind(data$yobs, array(0, dim = c(nz, data$T)))
+
+sink("JGS_6.1.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    p ~ dunif(0, 1)
+      
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+        
+      for (j in 1:T) {
+        yaug[i, j] ~ dbern(p.eff[i, j])
+        p.eff[i, j] <- z[i] * p
+      }
+        
+    }
+      
+    N <- sum(z[])
+  
+  }",
+
+fill = T)
+
+sink()
+
+
+
+jags_data <- list(yaug = yaug, 
+                  M = nrow(yaug), 
+                  T = ncol(yaug))
+
+
+inits <- function() list(z = rep(1, nrow(yaug)),
+                         p = runif(1, 0, 1))
+
+
+model <- jags.model("JGS_6.1.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 1000)
+
+
+update(model, n.iter = 5000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "p", "omega"),
+                        n.iter = 1000,
+                        thin = 1)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+  
+
+```
+
