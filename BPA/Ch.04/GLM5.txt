@@ -4,6 +4,8 @@
     
       mu ~ dnorm(0, 0.01)
       
+      b ~ dnorm(0, 0.01)
+      
       for (j in 1:n_sites) {
         a[j] ~ dnorm(0, a_tau)
       }
@@ -15,13 +17,13 @@
       }
       e_tau <- 1 / (e_sigma * e_sigma)
       e_sigma ~ dunif(0, 3)
-
+      
       for (i in 1:n_years) {
     
         for (j in 1:n_sites) {
     
           C[i, j] ~ dpois(lambda[i, j])
-          log(lambda[i, j]) <- mu + a[j] + e[i]
+          log(lambda[i, j]) <- mu + b * first[i, j] + a[j] + e[i]
     
         }
     

@@ -17,6 +17,7 @@ library(tidyverse)
 library(brms)
 library(rethinking)
 library(tidybayes)
+library(rjags)
 
 ```
 
@@ -34,14 +35,15 @@ y <- N <- numeric(n_years)
 N[1] <- N1
 lambda <- rnorm(n_years - 1, mean_lambda, sigma2_lambda ^ 0.5)
 
+# state process
+
 for(t in 1:(n_years-1)){
-  
   N[t+1] <- N[t] * lambda[t]
-  
 }
 
 N
 
+# observation process
 
 for(t in 1:n_years){
   y[t] <- rnorm(1, N[t], sigma2_y ^ 0.5)
@@ -55,52 +57,244 @@ y
 
 ```{r}
 
-
 ggplot() +
-  (aes(1:25, y)) +
-  geom_path() +
+  geom_path(aes(1:25, y)) +
+  geom_path(aes(1:25, N), color = "red") +
   guides(color = "none")
 
 
 ```
 
-## Model simulated counts 
+## rjags
 
 ```{r}
 
-data_ret <- tibble(t = 1:25, y = y, N = N)
-
-m1_ret <- ulam(
-  
-  alist(
+sink("ssm_5.1.txt")
+cat("
     
-        y ~ normal(N_est, sigma_obs),
-        lambda ~ normal(mean_lambda, sigma_proc),
-        
-        transpars> vector[N]:N_est
-        transpars> N_est[1] <- N_est
-          
-          vector<lower=0>[T] N_est;
-
-  N_est[1] = N_est1;
-  // State process
-  for (t in 1 : (T - 1)) {
-    N_est[t + 1] = N_est[t] * lambda[t];
-        
-,
-        a ~ dnorm(0, 2)),
-  data = tits_ret, 
-  chains = 3,
-  iter = 2000
-  
+    model {
+    
+      # Prioirs
+      
+      N.est[1] ~ dunif(0, 500)
+      mean.lambda ~ dunif(0, 10)
+      sigma.proc ~ dunif(0, 10)
+      sigma2.proc <- pow(sigma.proc, 2)
+      tau.proc <- pow(sigma.proc, -2)
+      sigma.obs ~ dunif(0, 100)
+      sigma2.obs <- pow(sigma.obs, 2)
+      tau.obs <-pow(sigma.obs, -2)
+    
+      # Likelihood
+      # State process
+      
+      for (t in 1:(T-1)) {
+        lambda[t] ~ dnorm(mean.lambda, tau.proc)
+        N.est[t+1] <- N.est[t] * lambda[t]
+      }
+    
+      # Observation process
+      
+      for (t in 1:T) {
+        y[t] ~ dnorm(N.est[t], tau.obs)
+      }
+      
+    }
+    ", fill = TRUE
 )
+sink()
+
+N_data <- list(y = y, T = n_years)
+
+inits <- function() list(sigma.proc = runif(1, 0, 5),
+                         mean.lambda = runif(1, 0.1, 2),
+                         sigma.obs = runif(1, 0, 10),
+                         N.est = c(runif(1, 20, 40), 
+                                   rep(NA, (n_years - 1))))
+
+model <- jags.model("ssm_5.1.txt", 
+                    data = N_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 10000)
 
 
-precis(m1_ret)
-traceplot(m1_ret, "a", alpha = 0.5)
-trankplot(m1_ret, bg = col.alpha("black",0.15))
-stancode(m1_ret)
+update(model, n.iter = 50000)
 
-get_variables(ssm)
+
+samples <- coda.samples(model, 
+                        variable.names = c("lambda", "N.est", "sigma2.proc", 
+                                           "sigma2.obs", "mean.lambda"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+library(tidybayes)
+library(ggdist)
+
+x <- tidy_draws(samples) %>%
+  dplyr::select(1:28) %>%
+  pivot_longer(cols = 4:28, names_to = "year", values_to = "N.est") %>%
+  mutate(year = as.integer(str_sub(year, 7, -2)))
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(aes(fill_ramp = stat(.width)), .width = ppoints(50), size = 0.25,
+                  show.legend = F, fill = "#00B0F6", lty = 3) +
+  scale_fill_ramp_continuous(range = c(1, 0), from = rgb(1, 1, 1, alpha = 0))
+
+
+t <- tibble(year = 1:25, N, y)
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(.width = c(0.95), alpha = 0.2) +
+  geom_line(data = t, aes(year, N)) +
+  geom_line(data = t, aes(year, y), color = "red")
+
 
 ```
+
+```{r}
+
+n_years <- 25
+N <- rep(50, n_years)
+
+p <- 0.7
+y = numeric(n_years)
+for( t in 1:n_years) {
+  y[t] <- rbinom(1, N[t], p)
+}
+y
+
+
+```
+
+```{r}
+
+N_data <- list(y = y, T = n_years)
+
+intis <- function() list(sigma.proc = runif(1, 0, 5),
+                         mean.lambda = runif(1, 0.1, 2),
+                         sigma.obs = runif(1, 0, 10),
+                         N.est = c(runif(1, 30, 60), rep(NA, (n_years -1))))
+
+model <- jags.model("ssm_5.1.txt", 
+                    data = N_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 10000)
+
+
+update(model, n.iter = 50000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("lambda", "N.est", "sigma2.proc", 
+                                           "sigma2.obs", "mean.lambda"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+library(tidybayes)
+library(ggdist)
+
+x <- tidy_draws(samples) %>%
+  dplyr::select(1:28) %>%
+  pivot_longer(cols = 4:28, names_to = "year", values_to = "N.est") %>%
+  mutate(year = as.integer(str_sub(year, 7, -2)))
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(aes(fill_ramp = stat(.width)), .width = ppoints(50), size = 0.25,
+                  show.legend = F, fill = "#00B0F6", lty = 3) +
+  scale_fill_ramp_continuous(range = c(1, 0), from = rgb(1, 1, 1, alpha = 0))
+
+
+t <- tibble(year = 1:25, N, y)
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(.width = c(0.95), alpha = 0.2) +
+  geom_line(data = t, aes(year, N)) +
+  geom_line(data = t, aes(year, y), color = "red")
+
+
+```
+
+
+```{r}
+
+n_years <- 25
+N <- rep(50, n_years)
+
+lp <- -0.5 + 0.1*(1:n_years)
+p <- plogis(lp)
+y = numeric(n_years)
+for( t in 1:n_years) {
+  y[t] <- rbinom(1, N[t], p[t])
+}
+y
+
+
+```
+
+```{r}
+
+N_data <- list(y = y, T = n_years)
+
+intis <- function() list(sigma.proc = runif(1, 0, 5),
+                         mean.lambda = runif(1, 0.1, 2),
+                         sigma.obs = runif(1, 0, 10),
+                         N.est = c(runif(1, 30, 60), rep(NA, (n_years -1))))
+
+model <- jags.model("ssm_5.1.txt", 
+                    data = N_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 10000)
+
+
+update(model, n.iter = 50000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("lambda", "N.est", "sigma2.proc", 
+                                           "sigma2.obs", "mean.lambda"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+x <- tidy_draws(samples) %>%
+  dplyr::select(1:28) %>%
+  pivot_longer(cols = 4:28, names_to = "year", values_to = "N.est") %>%
+  mutate(year = as.integer(str_sub(year, 7, -2)))
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(aes(fill_ramp = stat(.width)), .width = ppoints(50), size = 0.25,
+                  show.legend = F, fill = "#00B0F6", lty = 3) +
+  scale_fill_ramp_continuous(range = c(1, 0), from = rgb(1, 1, 1, alpha = 0))
+
+
+t <- tibble(year = 1:25, N, y)
+
+ggplot(x, aes(year, N.est)) +
+  stat_lineribbon(.width = c(0.95), alpha = 0.2) +
+  geom_line(data = t, aes(year, N)) +
+  geom_line(data = t, aes(year, y), color = "red")
+
+
+```
+

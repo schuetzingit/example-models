@@ -35,7 +35,8 @@ tits <- read_table("tits.txt") %>%
          site_i = as.integer(as.factor(site)),
          year_j = year - (min(year) - 1)) %>%
   replace_na(list(obs = "272", first = 0)) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(obs_k = as.integer(as.factor(obs)))
   
 
 tits
@@ -583,20 +584,14 @@ cat("
       mu ~ dnorm(0, 0.01)
       
       for (j in 1:n_sites) {
-      
         a[j] ~ dnorm(0, a_tau)
-      
       }
-    
       a_tau <- 1 / (a_sigma * a_sigma)
       a_sigma ~ dunif(0, 5)
 
-    for (i in 1:n_years) {
-      
+      for (i in 1:n_years) {
         e[i] ~ dnorm(0, e_tau)
-      
       }
-    
       e_tau <- 1 / (e_sigma * e_sigma)
       e_sigma ~ dunif(0, 3)
 
@@ -661,15 +656,22 @@ C <- tits %>%
   dplyr::select(-1) %>%
   as.matrix() %>%
   array(dim = c(9, 235))
+
+first <- tits %>%
+  dplyr::select(first, year, site) %>%
+  pivot_wider(id_cols = year, names_from = site, values_from = first) %>%
+  dplyr::select(-1) %>%
+  as.matrix() %>%
+  array(dim = c(9, 235))
   
 n_years <- 9
 
 n_sites <- 235
 
-my_data <- list("C" = C, "n_years" = n_years, "n_sites" = n_sites)
+my_data <- list("C" = C, "first" = first, "n_years" = n_years, "n_sites" = n_sites)
 
 
-sink("GLM4.txt")
+sink("GLM5.txt")
 
 cat("
     
@@ -677,30 +679,26 @@ cat("
     
       mu ~ dnorm(0, 0.01)
       
+      b ~ dnorm(0, 0.01)
+      
       for (j in 1:n_sites) {
-      
         a[j] ~ dnorm(0, a_tau)
-      
       }
-    
       a_tau <- 1 / (a_sigma * a_sigma)
       a_sigma ~ dunif(0, 5)
 
-    for (i in 1:n_years) {
-      
+      for (i in 1:n_years) {
         e[i] ~ dnorm(0, e_tau)
-      
       }
-    
       e_tau <- 1 / (e_sigma * e_sigma)
       e_sigma ~ dunif(0, 3)
-
+      
       for (i in 1:n_years) {
     
         for (j in 1:n_sites) {
     
           C[i, j] ~ dpois(lambda[i, j])
-          log(lambda[i, j]) <- mu + a[j] + e[i]
+          log(lambda[i, j]) <- mu + b * first[i, j] + a[j] + e[i]
     
         }
     
@@ -714,11 +712,12 @@ sink()
 
 
 inits <- function() list(mu = runif(1, 0, 4),
+                         b = runif(1, -2, 2),
                          a = runif(n_sites, -2, 2),
                          e = runif(n_years, -2, 2))
 
 
-model <- jags.model("GLM4.txt", 
+model <- jags.model("GLM5.txt", 
                     data = my_data, 
                     inits = inits, 
                     n.chains = 3,
@@ -729,7 +728,7 @@ update(model, n.iter = 5000)
 
 
 samples <- coda.samples(model, 
-                        variable.names = c("mu", "a", "e", "a_sigma", "e_sigma"),
+                        variable.names = c("mu", "b", "a", "e", "a_sigma", "e_sigma"),
                         n.iter = 5000,
                         thin = 5)
 
@@ -746,6 +745,229 @@ traceplot(samples)
 
 ```
 
+## rjags
+
+```{r}
+
+C <- tits %>%
+  dplyr::select(y, year, site) %>%
+  pivot_wider(id_cols = year, names_from = site, values_from = y) %>%
+  dplyr::select(-1) %>%
+  as.matrix() %>%
+  array(dim = c(9, 235))
+
+first <- tits %>%
+  dplyr::select(first, year, site) %>%
+  pivot_wider(id_cols = year, names_from = site, values_from = first) %>%
+  dplyr::select(-1) %>%
+  as.matrix() %>%
+  array(dim = c(9, 235))
+
+year <- (1:9 - 5) / 4
+  
+n_years <- 9
+
+n_sites <- 235
+
+my_data <- list("C" = C, "first" = first, "year" = year, "n_years" = n_years, "n_sites" = n_sites)
+
+
+sink("GLM6.txt")
+
+cat("
+    
+    model {
+    
+      mu ~ dnorm(0, 0.01)
+      
+      b1 ~ dnorm(0, 0.01)
+      b2 ~ dnorm(0, 0.01)
+      
+      for (j in 1:n_sites) {
+        a[j] ~ dnorm(0, a_tau)
+      }
+      a_tau <- 1 / (a_sigma * a_sigma)
+      a_sigma ~ dunif(0, 5)
+
+      for (i in 1:n_years) {
+        e[i] ~ dnorm(0, e_tau)
+      }
+      e_tau <- 1 / (e_sigma * e_sigma)
+      e_sigma ~ dunif(0, 3)
+      
+      for (i in 1:n_years) {
+    
+        for (j in 1:n_sites) {
+    
+          C[i, j] ~ dpois(lambda[i, j])
+          log(lambda[i, j]) <- mu + b1 * first[i, j] + b2 * year[i] + a[j] + e[i]
+    
+        }
+    
+      }
+    
+    }
+    
+    ", fill = TRUE)
+
+sink()
+
+
+inits <- function() list(mu = runif(1, 0, 4),
+                         b1 = runif(1, -1, 1),
+                         b2 = runif(1, -1, 1),
+                         a = runif(n_sites, -2, 2),
+                         e = runif(n_years, -2, 2))
+
+
+model <- jags.model("GLM6.txt", 
+                    data = my_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 6000)
+
+
+update(model, n.iter = 6000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("mu", "b1", "b2", "a", "e", "a_sigma", "e_sigma"),
+                        n.iter = 6000,
+                        thin = 6)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+
+
+
+```
+
+## rjags
+
+```{r}
+
+C <- tits %>%
+  dplyr::select(y, year, site) %>%
+  pivot_wider(id_cols = year, names_from = site, values_from = y) %>%
+  dplyr::select(-1) %>%
+  as.matrix() %>%
+  array(dim = c(9, 235))
+
+first <- tits %>%
+  dplyr::select(first, year, site) %>%
+  pivot_wider(id_cols = year, names_from = site, values_from = first) %>%
+  dplyr::select(-1) %>%
+  as.matrix() %>%
+  array(dim = c(9, 235))
+
+obs <- tits %>%
+  dplyr::select(obs = obs_k, year, site) %>%
+  pivot_wider(id_cols = year, names_from = site, values_from = obs) %>%
+  dplyr::select(-1) %>%
+  as.matrix() %>%
+  array(dim = c(9, 235))
+
+year <- (1:9 - 5) / 4
+  
+n_years <- 9
+
+n_sites <- 235
+
+n_obs = 272
+
+my_data <- list("C" = C, "first" = first, "obs" = obs, "year" = year, "n_years" = n_years, "n_sites" = n_sites, "n_obs" = n_obs)
+
+
+sink("GLM7.txt")
+
+cat("
+    
+    model {
+    
+      mu ~ dnorm(0, 0.01)
+      
+      b1 ~ dnorm(0, 0.01)
+      b2 ~ dnorm(0, 0.01)
+      
+      for (j in 1:n_sites) {
+        a[j] ~ dnorm(0, a_tau)
+      }
+      a_tau <- 1 / (a_sigma * a_sigma)
+      a_sigma ~ dunif(0, 3)
+
+      for (i in 1:n_years) {
+        e[i] ~ dnorm(0, e_tau)
+      }
+      e_tau <- 1 / (e_sigma * e_sigma)
+      e_sigma ~ dunif(0, 1)
+      
+      for (i in 1:n_obs) {
+        g[i] ~ dnorm(0, g_tau)
+      }
+      g_tau <- 1 / (g_sigma * g_sigma)
+      g_sigma ~ dunif(0, 1)
+      
+      for (i in 1:n_years) {
+    
+        for (j in 1:n_sites) {
+    
+          C[i, j] ~ dpois(lambda[i, j])
+          log(lambda[i, j]) <- mu + b1 * first[i, j] + b2 * year[i] + a[j] + e[i] + g[obs[i, j]]
+    
+        }
+    
+      }
+    
+    }
+    
+    ", fill = TRUE)
+
+sink()
+
+
+inits <- function() list(mu = runif(1, 0, 4),
+                         b1 = runif(1, -1, 1),
+                         b2 = runif(1, -1, 1),
+                         a = runif(n_sites, -1, 1),
+                         e = runif(n_years, -1, 1),
+                         g = runif(n_obs, -1, 1))
+
+
+model <- jags.model("GLM7.txt", 
+                    data = my_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 8000)
+
+
+update(model, n.iter = 8000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("mu", "b1", "b2", 
+                                           "a", "e", "g", 
+                                           "a_sigma", "e_sigma", "g_sigma"),
+                        n.iter = 8000,
+                        thin = 8)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+
+
+
+```
 
 ```{r}
 
