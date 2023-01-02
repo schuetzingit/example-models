@@ -1,0 +1,27 @@
+
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    mean_lp <- logit(mean_p)
+    mean_p ~ dunif(0, 1)
+    tau <- 1 / (sd * sd) 
+    sd ~ dunif(0, 5)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      logit(p[i]) <- eps[i]
+      eps[i] ~ dnorm(mean_lp, tau) #I(-16, 16)
+      p.eff[i] <- z[i] * p[i]
+      y[i] ~ dbin(p.eff[i], T)
+        
+    }
+      
+    N <- sum(z[])
+
+  }

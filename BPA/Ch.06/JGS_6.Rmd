@@ -22,7 +22,7 @@ library(ggdist)
 
 ```
 
-## Simulate count data 
+## Simulate data under M0
 
 ```{r}
 
@@ -60,7 +60,7 @@ data <- simData()
 
 ```
 
-# data augmentaion
+# Analyze data under M0
 
 ```{r}
 
@@ -135,6 +135,796 @@ plot(samples)
 
 
   
+
+```
+
+## Simulate data under Mt 
+
+```{r}
+
+# simulation
+
+simData <- function(N = 100,
+                    mean_p = 0.2,
+                    T = 3,
+                    time_eff = runif(T, -2, 2)){
+
+  yfull <- yobs <- array(NA, dim = c(N, T))
+  p_vec <- array(NA, dim = T)
+  
+  for (j in 1:T) {
+    p <- plogis(log(mean_p / (1 - mean_p)) + time_eff[j])
+    yfull[ , j] <- rbinom(n = N, size = 1, prob = p)
+    p_vec[j] <- p
+  }
+  
+  everdetected <- apply(yfull, 1, max)
+  
+  C <- sum(everdetected)
+  
+  yobs <- yfull[everdetected == 1, ]
+  
+  cat(C, "out of", N, "animals present were detected.\n")
+  
+  return(list(N = N,
+              p_vec = p_vec,
+              C = C,
+              T = T,
+              yfull = yfull,
+              yobs = yobs))
+
+}
+
+
+data <- simData()
+
+```
+
+## Analyze data under Mt 
+
+```{r}
+
+nz <- 50
+
+yaug <- rbind(data$yobs, array(0, dim = c(nz, data$T)))
+
+sink("JGS_6.2.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    
+    for (i in 1:T) {
+      p[i] ~ dunif(0, 1)
+    }
+      
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+        
+      for (j in 1:T) {
+        yaug[i, j] ~ dbern(p.eff[i, j])
+        p.eff[i, j] <- z[i] * p[j]
+      }
+        
+    }
+      
+    N <- sum(z[])
+  
+  }",
+
+fill = T)
+
+sink()
+
+
+
+jags_data <- list(yaug = yaug, 
+                  M = nrow(yaug), 
+                  T = ncol(yaug))
+
+
+inits <- function() list(z = rep(1, nrow(yaug)),
+                         p = runif(data$T, 0, 1))
+
+
+model <- jags.model("JGS_6.2.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 1000)
+
+
+update(model, n.iter = 5000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "p", "omega"),
+                        n.iter = 1000,
+                        thin = 1)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+  
+
+```
+
+## Simulate data under Mb 
+
+```{r}
+
+# simulation
+
+simData <- function(N = 200,
+                    p = 0.3,
+                    T = 5,
+                    c = 0.4){
+
+  y_full <- y_obs <- array(NA, dim = c(N, T))
+  p_eff <- array(NA, dim = N)
+  
+  y_full[ , 1] <- rbinom(n = N, size = 1, prob = p)
+  
+  for (j in 2:T) {
+    p_eff <- (1 - y_full[ , (j - 1)]) * p + y_full[ , (j - 1)] * c
+    y_full[ , j] <- rbinom(n = N, size = 1, prob = p_eff)
+  }
+  
+  everdetected <- apply(y_full, 1, max)
+  
+  C <- sum(everdetected)
+  
+  y_obs <- y_full[everdetected == 1, ]
+  
+  cat(C, "out of", N, "animals present were detected.\n")
+  
+  return(list(N = N,
+              p = p,
+              c = c,
+              C = C,
+              T = T,
+              y_full = y_full,
+              y_obs = y_obs))
+
+}
+
+
+data <- simData()
+
+```
+
+## Analyze data under Mb 
+
+```{r}
+
+nz <- 150
+
+yaug <- rbind(data$y_obs, array(0, dim = c(nz, data$T)))
+
+sink("JGS_6.3.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    p ~ dunif(0, 1)
+    c ~ dunif(0, 1)
+      
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+        
+      # first occasion capture
+      
+      yaug[i, 1] ~ dbern(p.eff[i, 1])
+      p.eff[i, 1] <- z[i] * p
+  
+      
+      # subsequent occasions
+      
+      for (j in 2:T) {
+        yaug[i, j] ~ dbern(p.eff[i, j])
+        p.eff[i, j] <- z[i] * ((1 - yaug[i, (j - 1)]) *  p + yaug[i, (j - 1)] * c)
+      }
+      
+        
+    }
+      
+    N <- sum(z[])
+    trap_response <- c - p
+  
+  }",
+
+fill = T)
+
+sink()
+
+
+
+jags_data <- list(yaug = yaug, 
+                  M = nrow(yaug), 
+                  T = ncol(yaug))
+
+
+inits <- function() list(z = rep(1, nrow(yaug)),
+                         p = runif(1, 0, 1))
+
+
+model <- jags.model("JGS_6.3.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 1000)
+
+
+update(model, n.iter = 5000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "p", "c", "trap_response", "omega"),
+                        n.iter = 1000,
+                        thin = 1)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+  
+
+```
+
+## Simulate data under Mh 
+
+```{r}
+
+# simulation
+
+simData <- function(N = 100,
+                    mean_p = 0.4,
+                    T = 5,
+                    sd = 1){
+
+  y_full <- y_obs <- array(NA, dim = c(N, T))
+  mean_lp <- log(mean_p / (1 - mean_p))
+  p_vec <- plogis(mean_lp + rnorm(N, 0, sd))
+  
+  for (i in 1:N) {
+    y_full[i, ] <- rbinom(n = T, size = 1, prob = p_vec[i])
+  }
+  
+  everdetected <- apply(y_full, 1, max)
+  
+  C <- sum(everdetected)
+  
+  y_obs <- y_full[everdetected == 1, ]
+  
+  cat(C, "out of", N, "animals present were detected.\n")
+  
+  hist(p_vec, xlim = c(0, 1), nclass = 20)
+  
+  return(list(N = N,
+              p_vec = p_vec,
+              mean_lp = mean_lp,
+              C = C,
+              T = T,
+              y_full = y_full,
+              y_obs = y_obs))
+
+}
+
+
+data <- simData()
+
+```
+
+## Analyze data under Mh 
+
+```{r}
+
+y <- sort(apply(data$y_obs, 1, sum), decreasing = TRUE)
+
+nz <- 300
+
+yaug <- c(y, rep(0, nz))
+
+sink("JGS_6.4.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    mean_lp <- logit(mean_p)
+    mean_p ~ dunif(0, 1)
+    tau <- 1 / (sd * sd) 
+    sd ~ dunif(0, 5)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      logit(p[i]) <- eps[i]
+      eps[i] ~ dnorm(mean_lp, tau) #I(-16, 16)
+      p.eff[i] <- z[i] * p[i]
+      y[i] ~ dbin(p.eff[i], T)
+        
+    }
+      
+    N <- sum(z[])
+
+  }",
+
+fill = T)
+
+sink()
+
+
+
+jags_data <- list(y = yaug, 
+                  M = length(yaug), 
+                  T = ncol(data$y_obs))
+
+
+inits <- function() list(z = rep(1, length(yaug)),
+                         sd = runif(1, 0.1, 0.9))
+
+
+model <- jags.model("JGS_6.4.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 25000)
+
+
+update(model, n.iter = 25000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "mean_p", "p", "sd", "omega"),
+                        n.iter = 1000,
+                        thin = 1)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+  
+
+```
+
+## Simulate data under Mth 
+
+```{r}
+
+# simulation
+
+simData <- function(N = 100,
+                    mean_p = 0.4,
+                    T = 5,
+                    time_eff = runif(T, -1, 1),
+                    sd = 1){
+
+  y_full <- y_obs <- p <- array(NA, dim = c(N, T))
+  mean_lp <- log(mean_p / (1 - mean_p))
+  eps <- rnorm(N, 0, sd)
+  
+  for (j in 1:T) {
+    pp <- p[ , j] <- plogis(mean_lp + time_eff[j] + eps)
+    y_full[, j] <- rbinom(n = N, size = 1, prob = pp)
+  }
+  
+  everdetected <- apply(y_full, 1, max)
+  
+  C <- sum(everdetected)
+  
+  y_obs <- y_full[everdetected == 1, ]
+  
+  cat(C, "out of", N, "animals present were detected.\n")
+  cat("Mean p per occasion:", round(apply(p, 2, mean), 2), "\n")
+  
+  plot(plogis(mean_lp + time_eff), xlab = "occasion", type = "b")
+  hist(plogis(mean_lp + eps), xlim = c(0, 1), nclass = 20)
+  
+  return(list(N = N,
+              mean_lp = mean_lp,
+              time_eff = time_eff,
+              sd = sd,
+              eps = eps,
+              C = C,
+              T = T,
+              y_full = y_full,
+              y_obs = y_obs))
+
+}
+
+
+data <- simData()
+
+```
+
+## Analyze data under Mth 
+
+```{r}
+
+
+nz <- 300
+
+yaug <- rbind(data$y_obs, array(0, dim = c(nz, data$T)))
+
+sink("JGS_6.5.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    
+    for (j in 1:T) {
+      mean_lp[j] <- log(mean_p[j] / (1 - mean_p[j]))
+      mean_p[j] ~ dunif(0, 1)
+    }
+    
+    tau <- 1 / (sd * sd) 
+    sd ~ dunif(0, 5)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      eps[i] ~ dnorm(0, tau)#I(-16, 16)
+      
+      for (j in 1:T) {
+      
+        lp[i,j] <- mean_lp[j] + eps[i]
+        p[i,j] <- 1 / (1 + exp(-lp[i,j]))
+        p_eff[i,j] <- z[i] * p[i,j]
+        y[i,j] ~ dbern(p_eff[i,j])
+        
+      }
+        
+    }
+      
+    N <- sum(z[])
+
+  }",
+
+fill = TRUE)
+
+sink()
+
+
+
+jags_data <- list(y = yaug, 
+                  M = nrow(yaug), 
+                  T = ncol(yaug))
+
+
+inits <- function() list(z = rep(1, nrow(yaug)),
+                         sd = runif(1, 0.1, 0.9))
+
+
+model <- jags.model("JGS_6.5.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 25000)
+
+
+update(model, n.iter = 25000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "mean_p", "mean_lp", "sd", "omega"),
+                        n.iter = 1000,
+                        thin = 1)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+```
+
+## Analyze data under Mtbh 
+
+```{r}
+
+p610 <- read.table("p610.txt", header = TRUE)
+
+y <- p610[, 5:9]                        # Grab counts
+y[y > 1] <- 1 
+
+sink("JGS_6.6.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    
+    for (j in 1:T) {
+      alpha[j] <- logit(mean_p[j])
+      mean_p[j] ~ dunif(0, 1)
+    }
+    
+    gamma ~ dnorm(0, 0.01)
+    tau <- 1 / (sd * sd) 
+    sd ~ dexp(1)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      eps[i] ~ dnorm(0, tau)
+      
+      # first occasion
+      
+      y[i,1] ~ dbern(p_eff[i,1])
+      p_eff[i,1] <- z[i] * p[i,1]
+      p[i,1] <- ilogit(lp[i,1])   
+      lp[i,1] <- alpha[1] + eps[i]
+      
+      # subsequent occasions
+      
+      for (j in 2:T) {
+      
+        y[i,j] ~ dbern(p_eff[i,j])
+        p_eff[i,j] <- z[i] * p[i,j]
+        p[i,j] <- ilogit(lp[i,j])
+        lp[i,j] <- alpha[j] + eps[i] + gamma * y[i,(j-1)]
+        
+      }
+        
+    }
+      
+    N <- sum(z[])
+
+  }",
+
+fill = TRUE)
+
+sink()
+
+
+
+jags_data <- list(y = as.matrix(y), 
+                  M = nrow(y), 
+                  T = ncol(y))
+
+
+inits <- function() list(z = rep(1, nrow(y)),
+                         sd = runif(1, 0.1, 0.9))
+
+
+model <- jags.model("JGS_6.6.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 25000)
+
+
+update(model, n.iter = 50000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "mean_p", "gamma", "sd", "omega"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+  
+
+```
+
+## individual covariate Mt+X
+
+```{r}
+
+p610 <- read.table("p610.txt", header = TRUE)
+y <- p610[, 5:9]                        # Grab counts
+y[y > 1] <- 1 
+everobserved <- apply(y, 1, max)
+wt <- p610$bm[everobserved ==1]
+yy <- as.matrix(y[everobserved ==1, ])
+dimnames(yy) <- NULL
+
+
+mlog <- mean(log(p610$bm^(1/3)))
+sdlog <- sd(log(p610$bm^(1/3)))
+hist((p610$bm^(1/3)), nclass = 25, xlim = c(0, 30), freq = F)
+lines(density(rlnorm(n = 10^6, meanlog = mlog, sdlog = sdlog)))
+
+```
+## Analyze individual covariate Mt+X
+
+```{r}
+
+nz <- 150
+yaug <- rbind(yy, array(0, dim = c(nz, ncol(yy))))
+logwt3 <- c(log(wt^(1/3)), rep(NA, nz))
+
+
+sink("JGS_6.7.txt")
+
+cat("
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    
+    for (j in 1:T) {
+      alpha[j] <- logit(mean_p[j])
+      mean_p[j] ~ dunif(0, 1)
+    }
+    
+    beta ~ dnorm(0, 0.01)
+    mu.size ~ dnorm(0, 0.01)
+    tau.size <- 1 / (sd.size * sd.size) 
+    sd.size ~ dexp(1) #dunif(0, prior.sd.upper)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      size[i] ~ dnorm(mu.size, tau.size)
+      
+     # subsequent occasions
+      
+      for (j in 1:T) {
+      
+        y[i,j] ~ dbern(p_eff[i,j])
+        p_eff[i,j] <- z[i] * p[i,j]
+        p[i,j] <- 1 / (1 + exp(-lp[i,j]))
+        lp[i,j] <- alpha[j] + beta * size[i]
+        
+      }
+        
+    }
+      
+    N <- sum(z[])
+
+  }",
+
+fill = TRUE)
+
+sink()
+
+
+
+jags_data <- list(y = yaug, 
+                  size = logwt3 - mean(logwt3, na.rm = T),
+                  M = nrow(yaug), 
+                  T = ncol(yaug),
+                  prior.sd.upper = 3)
+
+
+inits <- function() list(z = rep(1, nrow(yaug)),
+                         beta = runif(1, -1, 1),
+                         mu.size = rnorm(1, 0, 1))
+
+
+model <- jags.model("JGS_6.7.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 25000)
+
+
+update(model, n.iter = 50000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "mean_p", "beta", "mu.size", "sd.size", "omega"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+  
+
+
+```
+
+## pinna
+
+```{r}
+
+pinna <- read.table("pinna.txt", header = T)
+
+y <- cbind(pinna$d1, pinna$d2)
+size <- pinna$width
+
+nz <- 150
+yaug <- rbind(y, array(0, dim = c(nz, ncol(y))))
+size <- c(size, rep(NA, nz))
+
+
+jags_data <- list(y = yaug,
+                  size = size - mean(size, na.rm = T),
+                  M = nrow(yaug),
+                  T = ncol(yaug),
+                  prior.sd.upper = 5)
+  
+
+inits <- function() list(z = rep(1, nrow(yaug)),
+                         beta = runif(1, -1, 1),
+                         mu.size = rnorm(1, 0, 1))
+
+
+model <- jags.model("JGS_6.7.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 2000)
+
+
+update(model, n.iter = 5000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "mean_p", "beta", "mu.size", "sd.size", "omega"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
 
 ```
 

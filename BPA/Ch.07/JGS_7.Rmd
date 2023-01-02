@@ -1,0 +1,503 @@
+---
+title: "JGS_7"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+library(rjags)
+library(jagsUI)
+library(ggdist)
+
+```
+
+## Simulate capture histories
+
+```{r}
+
+n.occasions <- 6
+marked <- rep(100, n.occasions - 1)
+phi <- rep(0.8, n.occasions - 1)
+p <- rep(0.6, n.occasions - 1)
+
+PHI <- matrix(phi, ncol = n.occasions - 1, nrow = sum(marked))
+P <- matrix(p, ncol = n.occasions - 1, nrow = sum(marked))
+
+
+
+simCJS <- function(PHI, P, marked) {
+  
+  n.occasions <- dim(PHI)[2] + 1
+  CH <- matrix(0, ncol = n.occasions, nrow = sum(marked))
+  mark.occ <- rep(1:length(marked), marked[1:length(marked)])
+  
+  for (i in 1:sum(marked)) {
+    
+    CH[i, mark.occ[i]] <- 1
+    
+    if(mark.occ[i] == n.occasions) next
+    
+    for (t in (mark.occ[i] + 1):n.occasions) {
+      
+      sur <- rbinom(1, 1, PHI[i, t-1])
+      if (sur == 0) break
+      rp <- rbinom(1, 1,P[i, t-1])
+      if(rp == 1) CH[i,t] <- 1
+      
+    }
+    
+  }
+  
+  return(CH)
+  
+}
+
+
+CH <- simCJS(PHI, P, marked)
+  
+```
+
+```{r}
+
+getFirst <- function(x) min(which(x != 0))
+
+f <- apply(CH, 1, getFirst)
+
+```
+
+```{r}
+
+sink("CJS.c.c.txt")
+
+cat("
+    
+  model {
+  
+    for (i in 1:nind) {
+    
+      for (t in f[i]:(n.occasions - 1)) {
+      
+        phi[i,t] <- mean.phi
+        p[i,t] <- mean.p
+        
+      }
+      
+    }
+    
+    mean.phi ~ dunif(0, 1)
+    mean.p ~ dunif(0, 1)
+    
+    # likelihood
+    
+    for (i in 1:nind) {
+    
+      # define latent state at first capture
+      
+      z[i,f[i]] <- 1
+      
+      for (t in (f[i] + 1):n.occasions) {
+      
+        # state process
+        
+        z[i,t] ~ dbern(mu1[i,t])
+        mu1[i,t] <- phi[i,t-1] * z[i,t-1]
+        
+        # observation process
+        
+        y[i,t] ~ dbern(mu2[i,t])
+        mu2[i,t] <- p[i,t-1] * z[i,t]
+        
+      }
+    
+    }
+  
+  }
+  
+  ", fill = TRUE)
+
+sink()
+
+```
+
+```{r}
+
+sink("cjs.jags")
+cat("
+model{
+  # Priors
+   phi ~ dbeta(1, 1)
+   p ~ dbeta(1, 1)
+
+  # Likelihood
+  for(i in 1:nInd){
+   # Known to be alive on first occasion
+   z[i, f1[i]] <- 1
+
+   for(t in (f1[i] + 1):nOcc){
+    # State model
+    z[i, t] ~ dbern(phi * z[i, t - 1])
+
+    # Observation model
+    y[i, t] ~ dbern(p * z[i, t])
+   } # end t loop
+  } # end i loop
+} # end model
+    ", fill = TRUE)
+sink()
+
+```
+
+```{r}
+
+## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
+## The `apply` function allows us to apply this function to each row (MARGIN = 1)
+f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
+
+## Bundle data
+jags.data <- list(y = CH, 
+                  nInd = dim(CH)[1], 
+                  nOcc = dim(CH)[2], 
+                  f1 = f1)
+
+```
+
+```{r}
+
+z.init <- matrix(NA, nrow = 500, ncol = 6)
+
+for(i in 1:dim(z.init)[1]){
+  z.init[i, f1[i]:dim(z.init)[2]] <- 1
+  z.init[i,f1[i]] <- NA
+}
+
+### Initial values
+inits <- function(){list(phi = runif(1), p = runif(1),
+                         z = z.init)}
+
+### Parameters
+params <- c("phi", "p")
+
+
+### MCMC settings
+nc <- 3
+ni <- 15000
+nb <- 2500
+nt <- 1
+#na <- 500
+
+
+dipper1 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "cjs.jags", 
+                        n.chains = nc, 
+                        #n.adapt = na,
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+jagsUI::traceplot(dipper1)
+print(dipper1)
+
+```
+
+```{r}
+
+sink("cjs.grp.jags")
+cat("
+model{
+  # Priors
+   p[1] ~ dbeta(1, 1) # different p for each group
+   p[2] ~ dbeta(1, 1)
+   phi ~ dbeta(1, 1)
+
+  # Likelihood
+  for(i in 1:nInd){
+   # Known to be alive on first occasion
+   z[i, f1[i]] <- 1
+
+   for(t in (f1[i] + 1):nOcc){
+    # State model
+    z[i, t] ~ dbern(phi * z[i, t - 1])
+
+    # Observation model
+    y[i, t] ~ dbern(p[grp[i]] * z[i, t])
+    
+   } # end t loop
+  } # end i loop
+  
+  # Derived parameters
+  delta.p <- p[1] - p[2]
+    
+} # end model
+    ", fill = TRUE)
+sink()
+
+```
+
+```{r}
+
+## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
+## The `apply` function allows us to apply this function to each row (MARGIN = 1)
+f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
+
+grp <- 1 + rbern(500)
+
+## Bundle data
+jags.data <- list(y = CH, 
+                  nInd = dim(CH)[1], 
+                  nOcc = dim(CH)[2], 
+                  f1 = f1,
+                  grp = grp)
+
+```
+
+```{r}
+
+z.init <- matrix(NA, nrow = 500, ncol = 6)
+
+for(i in 1:dim(z.init)[1]){
+  z.init[i, f1[i]:dim(z.init)[2]] <- 1
+  z.init[i,f1[i]] <- NA
+}
+
+### Initial values
+inits <- function(){list(phi = runif(1), 
+                         p = runif(2),
+                         z = z.init)}
+
+### Parameters
+params <- c("phi", "p", "delta.p")
+
+
+### MCMC settings
+nc <- 3
+ni <- 15000
+nb <- 2500
+nt <- 1
+#na <- 500
+
+
+dipper1 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "cjs.grp.jags", 
+                        n.chains = nc, 
+                        #n.adapt = na,
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+jagsUI::traceplot(dipper1)
+print(dipper1)
+
+```
+```{r}
+
+sink("cjs.grp.re.jags")
+cat("
+model{
+  # Priors
+   p[1] ~ dbeta(1, 1) # different p for each group
+   p[2] ~ dbeta(1, 1)
+   
+   for (s in 1:nSites) {
+    l.phi[s] ~ dnorm(l.phi.mu, l.phi.tau)
+   }
+   
+   l.phi.mu ~ dnorm(0, 2)
+   l.phi.sd ~ dexp(1)
+   l.phi.tau <- pow(l.phi.sd, -2)
+   
+
+  # Likelihood
+  for(i in 1:nInd){
+   # Known to be alive on first occasion
+   z[i, f1[i]] <- 1
+
+   for(t in (f1[i] + 1):nOcc){
+    # State model
+    z[i, t] ~ dbern(phi[i] * z[i, t - 1])
+    phi[i] <- ilogit(e)
+    e <- l.phi[site[i]]
+    
+    #z[i] ~ dbern(omega)
+      #logit(p[i]) <- eps[i]
+      #eps[i] ~ dnorm(mean_lp, tau) #I(-16, 16)
+      #p.eff[i] <- z[i] * p[i]
+      #y[i] ~ dbin(p.eff[i], T)
+      
+      
+
+    # Observation model
+    y[i, t] ~ dbern(p[grp[i]] * z[i, t])
+    
+   } # end t loop
+  } # end i loop
+  
+  # Derived parameters
+  delta.p <- p[1] - p[2]
+    
+} # end model
+    ", fill = TRUE)
+sink()
+
+```
+
+```{r}
+
+## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
+## The `apply` function allows us to apply this function to each row (MARGIN = 1)
+f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
+
+grp <- 1 + rbern(500)
+
+site = sample(1:10, 500, replace = T)
+
+## Bundle data
+jags.data <- list(y = CH, 
+                  nInd = dim(CH)[1], 
+                  nOcc = dim(CH)[2],
+                  nSites = 10,
+                  f1 = f1,
+                  grp = grp,
+                  site = site)
+
+```
+
+```{r}
+
+z.init <- matrix(NA, nrow = 500, ncol = 6)
+
+for(i in 1:dim(z.init)[1]){
+  z.init[i, f1[i]:dim(z.init)[2]] <- 1
+  z.init[i,f1[i]] <- NA
+}
+
+### Initial values
+inits <- function(){list(phi = runif(10), 
+                         p = runif(2),
+                         z = z.init)}
+
+### Parameters
+params <- c("phi", "l.phi.mu", "p", "delta.p")
+
+
+### MCMC settings
+nc <- 3
+ni <- 15000
+nb <- 2500
+nt <- 1
+#na <- 500
+
+
+dipper1 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "cjs.grp.re.jags", 
+                        n.chains = nc, 
+                        #n.adapt = na,
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+jagsUI::traceplot(dipper1)
+print(dipper1)
+
+```
+
+```{r}
+model <- jags.model("cjs.jags", 
+                    data = jags.data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 2000)
+
+
+update(model, n.iter = 5000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("p", "phi"),
+                        n.iter = 1000,
+                        thin = 1)
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+
+```
+
+
+```{r}
+
+jags_data <- list(y = CH,
+                  f = f,
+                  nind = dim(CH)[1],
+                  n.occasions = dim(CH)[2])
+  
+  
+ch.init <- function(ch, f) {
+  
+  for (i in 1:dim(ch)[1]) {
+    
+    ch[i, 1:f[i]] <- NA
+    
+  }
+  
+  return(ch)
+  
+}
+
+
+inits <- list(z = ch.init(CH, f),
+              mean.phi = runif(1, 0, 1),
+              mean.p = runif(1, 0, 1))
+
+
+model <- jags.model("CJS.c.c.txt", 
+                    data = jags_data, 
+                    inits = inits, 
+                    n.chains = 3,
+                    n.adapt = 2000)
+
+
+update(model, n.iter = 5000)
+
+
+samples <- coda.samples(model, 
+                        variable.names = c("N", "mean_p", "beta", "mu.size", "sd.size", "omega"),
+                        n.iter = 10000,
+                        thin = 10)
+
+
+summary(samples)
+
+
+plot(samples)
+
+
+traceplot(samples)
+
+
+```
+

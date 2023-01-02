@@ -1,0 +1,41 @@
+
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    
+    for (j in 1:T) {
+      alpha[j] <- logit(mean_p[j])
+      mean_p[j] ~ dunif(0, 1)
+    }
+    
+    beta ~ dnorm(0, 0.01)
+    mu.size ~ dnorm(0, 0.01)
+    tau.size <- 1 / (sd.size * sd.size) 
+    sd.size ~ dexp(1) #dunif(0, prior.sd.upper)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      size[i] ~ dnorm(mu.size, tau.size)
+      
+     # subsequent occasions
+      
+      for (j in 1:T) {
+      
+        y[i,j] ~ dbern(p_eff[i,j])
+        p_eff[i,j] <- z[i] * p[i,j]
+        p[i,j] <- 1 / (1 + exp(-lp[i,j]))
+        lp[i,j] <- alpha[j] + beta * size[i]
+        
+      }
+        
+    }
+      
+    N <- sum(z[])
+
+  }

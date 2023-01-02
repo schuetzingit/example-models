@@ -1,0 +1,45 @@
+
+model{
+  # Priors
+   p[1] ~ dbeta(1, 1) # different p for each group
+   p[2] ~ dbeta(1, 1)
+   
+   for (s in 1:nSites) {
+    l.phi[s] ~ dnorm(l.phi.mu, l.phi.tau)
+   }
+   
+   l.phi.mu ~ dnorm(0, 2)
+   l.phi.sd ~ dexp(1)
+   l.phi.tau <- pow(l.phi.sd, -2)
+   
+
+  # Likelihood
+  for(i in 1:nInd){
+   # Known to be alive on first occasion
+   z[i, f1[i]] <- 1
+
+   for(t in (f1[i] + 1):nOcc){
+    # State model
+    z[i, t] ~ dbern(phi * z[i, t - 1])
+    phi <- ilogit(l.phi[site[i]])
+    
+    
+    #z[i] ~ dbern(omega)
+      #logit(p[i]) <- eps[i]
+      #eps[i] ~ dnorm(mean_lp, tau) #I(-16, 16)
+      #p.eff[i] <- z[i] * p[i]
+      #y[i] ~ dbin(p.eff[i], T)
+      
+      
+
+    # Observation model
+    y[i, t] ~ dbern(p[grp[i]] * z[i, t])
+    
+   } # end t loop
+  } # end i loop
+  
+  # Derived parameters
+  delta.p <- p[1] - p[2]
+    
+} # end model
+    

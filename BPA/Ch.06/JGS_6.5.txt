@@ -1,0 +1,37 @@
+
+
+  model {
+    
+    # priors
+      
+    omega ~ dunif(0, 1)
+    
+    for (j in 1:T) {
+      mean_lp[j] <- log(mean_p[j] / (1 - mean_p[j]))
+      mean_p[j] ~ dunif(0, 1)
+    }
+    
+    tau <- 1 / (sd * sd) 
+    sd ~ dunif(0, 5)
+      
+    # likelihood
+      
+    for (i in 1:M) {
+        
+      z[i] ~ dbern(omega)
+      eps[i] ~ dnorm(0, tau)#I(-16, 16)
+      
+      for (j in 1:T) {
+      
+        lp[i,j] <- mean_lp[j] + eps[i]
+        p[i,j] <- 1 / (1 + exp(-lp[i,j]))
+        p_eff[i,j] <- z[i] * p[i,j]
+        y[i,j] ~ dbern(p_eff[i,j])
+        
+      }
+        
+    }
+      
+    N <- sum(z[])
+
+  }
