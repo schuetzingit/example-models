@@ -1,12 +1,15 @@
 
 model{
-  # Priors
-   p[1] ~ dbeta(1, 1) # different phi for each group
+  ### Priors
+  
+   p[1] ~ dbeta(1, 1) # different p for each group
    p[2] ~ dbeta(1, 1)
    phi ~ dbeta(1, 1)
 
-  # Likelihood
+  ### Likelihood
+  
   for(i in 1:nInd){
+  
    # Known to be alive on first occasion
    z[i, f1[i]] <- 1
 

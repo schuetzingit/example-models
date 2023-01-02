@@ -1,0 +1,52 @@
+
+    
+  model {
+  
+    # priors
+    
+    ### NOTE I have changed the code here to make it less confusing to me
+    
+    for (t in 1:(nOcc - 1)) {
+      
+        logit(phi[t]) <- phi.mu + beta * x[t] + eps[t]
+        eps[t] ~ dnorm(0, phi.tau)
+
+      }
+
+    beta ~ dnorm(0, 0.01)
+    phi.mu ~ dnorm(0, 0.01)
+    phi.mean <- ilogit(phi.mu)
+    phi.sd ~ dunif(0, 10)
+    phi.tau <- pow(phi.sd, -2) 
+    
+    p ~ dunif(0,1)
+
+    
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i,f1[i]] <- 1
+      
+      for (t in (f1[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i,t] ~ dbern(mu1[i,t])
+        mu1[i,t] <- phi[t-1] * z[i,t-1]     ### NOTE I have changed the code here to make it less confusing to me
+
+        
+        # observation process
+        
+        y[i,t] ~ dbern(mu2[i,t])
+        mu2[i,t] <- p * z[i,t]      ### NOTE I have changed the code here to make it less confusing to me
+        
+      }
+    
+    }
+  
+  }
+  
+  

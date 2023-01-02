@@ -8,15 +8,20 @@
     
       for (t in f1[i]:(nOcc - 1)) {
       
-        phi[i,t] <- mean.phi
-        p[i,t] <- mean.p
+        phi[i,t] <- alpha[t]
+        p[i,t] <- beta[t]
         
       }
       
     }
     
-    mean.phi ~ dunif(0, 1)
-    mean.p ~ dunif(0, 1)
+    for (t in 1:(nOcc - 1)) {
+      
+        alpha[t] ~ dunif(0,1)
+        beta[t] ~ dunif(0,1)
+        
+      }
+
     
     # likelihood
     
