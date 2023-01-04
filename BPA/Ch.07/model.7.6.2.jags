@@ -1,0 +1,57 @@
+
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- phi.eta[group[i], t]
+        p[i, t] <- p.g[group[i]]
+      }
+    }
+
+    # for survival parameters
+    
+    for (u in 1:g) {
+      for (t in 1:(nOcc - 1)){
+        phi.eta[u, t] <- phi.mu[u] + eps[u, t]
+        eps[u, t] ~ dnorm(0, phi.tau[u])
+      }
+      phi.g[u] ~ dunif(0, 1) 
+      phi.mu[u] <- logit(phi.g[u])
+      phi.sd[u] ~ dunif(0, 10)
+      phi.tau[u] <- pow(phi.sd[u], -2)
+    }
+    
+    for (u in 1:g){
+      p.g[u] ~ dunif(0, 1)
+    }
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+

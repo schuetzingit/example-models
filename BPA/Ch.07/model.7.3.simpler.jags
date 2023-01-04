@@ -1,0 +1,30 @@
+
+model {
+  
+  ##### Priors #####
+  
+  phi ~ dbeta(1, 1)
+  p ~ dbeta(1, 1)
+
+  ##### Likelihood #####
+  
+  # Loop over individuals
+  for (i in 1:nInd) {
+    
+    # Known to be alive on first occasion
+    z[i, f[i]] <- 1
+
+    # Loop over occasions
+    for (t in (f[i] + 1):nOcc) {
+      
+      # State model
+      z[i, t] ~ dbern(phi * z[i, t - 1])
+
+      # Observation model
+      y[i, t] ~ dbern(p * z[i, t])
+   
+    } # end t loop
+  
+  } # end i loop
+
+}

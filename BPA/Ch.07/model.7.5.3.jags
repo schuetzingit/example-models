@@ -1,0 +1,49 @@
+
+
+model {
+  
+    for (i in 1:nInd) {
+      eps[i] ~ dnorm(0, eps.tau)
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- mu + eps[i]
+        p[i, t] <- p.mu
+      }
+    }
+    
+    #for(i in 1:nInd) {
+    #  eps[i] ~ dnorm(0, eps.tau)
+    #}
+
+    p.mu ~ dunif(0, 1)
+    mu ~ dnorm(0, 0.01)
+    eps.sd ~ dunif(0, 5)
+    eps.tau <- pow(eps.sd, -2)
+    phi.mu <- ilogit(mu)
+
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+    
+    }
+    
+}
+
