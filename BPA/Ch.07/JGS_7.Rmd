@@ -23,40 +23,97 @@ library(ggdist)
 
 ```
 
-## Simulate capture histories
+## Define function to simulate capture histories
 
 ```{r}
 
-n.occasions <- 6
-marked <- rep(100, n.occasions - 1)
-phi <- rep(0.8, n.occasions - 1)
-p <- rep(0.6, n.occasions - 1)
-
-PHI <- matrix(phi, ncol = n.occasions - 1, nrow = sum(marked))
-P <- matrix(p, ncol = n.occasions - 1, nrow = sum(marked))
-
-
-
-simCJS <- function(PHI, P, marked) {
+simulateHistoriesCJS <- function(PHI, P, N) {
   
   n.occasions <- dim(PHI)[2] + 1
-  CH <- matrix(0, ncol = n.occasions, nrow = sum(marked))
-  mark.occ <- rep(1:length(marked), marked[1:length(marked)])
+  histories <- matrix(0, ncol = n.occasions, nrow = sum(N))
+  mark.occasion <- rep(1:length(N), N[1:length(N)])
   
-  for (i in 1:sum(marked)) {
+  for (i in 1:sum(N)) {
     
-    CH[i, mark.occ[i]] <- 1
+    histories[i, mark.occasion[i]] <- 1
+    if(mark.occasion[i] == n.occasions) next
     
-    if(mark.occ[i] == n.occasions) next
-    
-    for (t in (mark.occ[i] + 1):n.occasions) {
+    for (t in (mark.occasion[i] + 1):n.occasions) {
       
-      sur <- rbinom(1, 1, PHI[i, t-1])
-      if (sur == 0) break
-      rp <- rbinom(1, 1,P[i, t-1])
-      if(rp == 1) CH[i,t] <- 1
+      survived <- rbinom(1, 1, PHI[i, t-1])
+      if (survived == 0) break
+      recaptured <- rbinom(1, 1, P[i, t-1])
+      if(recaptured == 1) histories[i, t] <- 1
       
     }
+    
+  }
+  
+  return(histories)
+  
+}
+
+```
+
+## Define function to identify known latent states
+
+```{r}
+
+idKnownStatesCJS <- function(CH) {
+  
+  states <- CH
+  
+  for (i in 1:dim(CH)[1]) {
+    
+    first.detection <- min(which(CH[i, ] == 1))
+    last.detection <- max(which(CH[i, ] == 1))
+    states[i, first.detection:last.detection] <- 1
+    states[i, first.detection] <- NA
+    
+  }
+  
+  states[states == 0] <- NA
+  
+  return(states)
+  
+}
+
+
+```
+
+## Define function to identify fist capture occasion
+
+```{r}
+
+idFirstCaptureCJS <- function(CH) {
+  
+  f <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
+  
+  return(f)
+  
+}
+
+```
+
+## Define function to create initial values for z
+
+```{r}
+
+## this allows for more efficient computation 
+
+createZInitsCJS <- function(CH, FIRST) {
+  
+  for (i in 1:dim(CH)[1]) {
+    
+    if (sum(CH[i, ]) == 1) next
+    last.detection <- max(which(CH[i, ] == 1))
+    CH[i, FIRST[i]:last.detection] <- NA
+    
+  }
+  
+  for (i in 1:dim(CH)[1]) {
+    
+    CH[i, 1:FIRST[i]] <- NA
     
   }
   
@@ -65,41 +122,40 @@ simCJS <- function(PHI, P, marked) {
 }
 
 
-CH <- simCJS(PHI, P, marked)
-  
 ```
 
-## Define function to identify known latent states
 
 ```{r}
 
-knownStatesCJS <- function(ch) {
-  
-  state <- ch
-  
-  for (i in 1:dim(ch)[1]) {
-    
-    n1 <- min(which(ch[i, ] == 1))
-    n2 <- max(which(ch[i, ] == 1))
-    state[i, n1:n2] <- 1
-    state[i, n1] <- NA
-    
-  }
-  
-  state[state == 0] <- NA
-  
-  return(state)
-  
-}
+n.occasions <- 6
+n <- rep(100, n.occasions - 1)
+phi <- rep(0.8, n.occasions - 1)
+p <- rep(0.6, n.occasions - 1)
 
-z <- knownStatesCJS(CH)
+phi.matrix <- matrix(phi, ncol = n.occasions - 1, nrow = sum(n))
+p.matrix <- matrix(p, ncol = n.occasions - 1, nrow = sum(n))
 
 ```
 
 
 ```{r}
 
-sink("CJS.c.c.txt")
+
+ch <- simulateHistoriesCJS(phi.matrix, p.matrix, n)
+
+
+z <- idKnownStatesCJS(ch)
+
+
+f <- idFirstCaptureCJS(ch)
+
+
+```
+
+
+```{r}
+
+sink("model.7.3.jags")
 
 cat("
     
@@ -109,7 +165,7 @@ cat("
     
     for (i in 1:nInd) {
     
-      for (t in f1[i]:(nOcc - 1)) {
+      for (t in f[i]:(nOcc - 1)) {
       
         phi[i,t] <- mean.phi
         p[i,t] <- mean.p
@@ -127,9 +183,9 @@ cat("
     
       # define latent state at first capture
       
-      z[i,f1[i]] <- 1
+      z[i,f[i]] <- 1
       
-      for (t in (f1[i] + 1):nOcc) {
+      for (t in (f[i] + 1):nOcc) {
       
         # state process
         
@@ -157,13 +213,13 @@ sink()
 
 ## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
 ## The `apply` function allows us to apply this function to each row (MARGIN = 1)
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
+#f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
 
 ## Bundle data
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1)
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f)
 
 ```
 
@@ -172,8 +228,10 @@ jags.data <- list(y = CH,
 z.init <- matrix(NA, nrow = 500, ncol = 6)
 
 for(i in 1:dim(z.init)[1]){
-  z.init[i, f1[i]:dim(z.init)[2]] <- 1
-  z.init[i,f1[i]] <- NA
+  
+  z.init[i, f[i]:dim(z.init)[2]] <- 1
+  z.init[i, f[i]] <- NA
+  
 }
 
 ### Initial values
@@ -192,24 +250,27 @@ nb <- 2500
 nt <- 1
 
 
-dipper1 <- jagsUI::jags(data = jags.data, 
+model.7.3 <- jagsUI::jags(data = jags.data, 
                         inits = inits, 
                         parameters.to.save = params,
-                        model.file = "CJS.c.c.txt", 
+                        model.file = "model.7.3.jags", 
                         n.chains = nc, 
                         n.iter = ni, 
                         n.burnin = nb, 
                         n.thin = nt,
                         parallel = TRUE)
 
-jagsUI::traceplot(dipper1)
-print(dipper1)
+
+jagsUI::traceplot(model.7.3)
+
+
+print(model.7.3)
 
 ```
 
 ```{r}
 
-sink("cjs.jags")
+sink("model.7.3.simpler.jags")
 
 cat("
 model {
@@ -225,10 +286,10 @@ model {
   for (i in 1:nInd) {
     
     # Known to be alive on first occasion
-    z[i, f1[i]] <- 1
+    z[i, f[i]] <- 1
 
     # Loop over occasions
-    for (t in (f1[i] + 1):nOcc) {
+    for (t in (f[i] + 1):nOcc) {
       
       # State model
       z[i, t] ~ dbern(phi * z[i, t - 1])
@@ -246,32 +307,15 @@ sink()
 
 ```
 
-```{r}
-
-## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
-## The `apply` function allows us to apply this function to each row (MARGIN = 1)
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
-
-## Bundle data
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1)
-
-```
 
 ```{r}
 
-z.init <- matrix(NA, nrow = 500, ncol = 6)
-
-for(i in 1:dim(z.init)[1]){
-  z.init[i, f1[i]:dim(z.init)[2]] <- 1
-  z.init[i,f1[i]] <- NA
-}
 
 ### Initial values
-inits <- function(){list(phi = runif(1), p = runif(1),
+inits <- function(){list(phi = runif(1), 
+                         p = runif(1),
                          z = z.init)}
+
 
 ### Parameters
 params <- c("phi", "p")
@@ -284,121 +328,27 @@ nb <- 2500
 nt <- 1
 
 
-dipper1 <- jagsUI::jags(data = jags.data, 
+model.7.3.simpler <- jagsUI::jags(data = jags.data, 
                         inits = inits, 
                         parameters.to.save = params,
-                        model.file = "cjs.jags", 
+                        model.file = "model.7.3.simpler.jags", 
                         n.chains = nc, 
                         n.iter = ni, 
                         n.burnin = nb, 
                         n.thin = nt,
                         parallel = TRUE)
 
-jagsUI::traceplot(dipper1)
-print(dipper1)
+
+jagsUI::traceplot(model.7.3.simpler)
+
+
+print(model.7.3.simpler)
 
 ```
 
 ```{r}
 
-sink("cjs.grp.jags")
-
-cat("
-model{
-  ### Priors
-  
-   p[1] ~ dbeta(1, 1) # different p for each group
-   p[2] ~ dbeta(1, 1)
-   phi ~ dbeta(1, 1)
-
-  ### Likelihood
-  
-  for(i in 1:nInd){
-  
-   # Known to be alive on first occasion
-   z[i, f1[i]] <- 1
-
-   for(t in (f1[i] + 1):nOcc){
-    # State model
-    z[i, t] ~ dbern(phi * z[i, t - 1])
-
-    # Observation model
-    y[i, t] ~ dbern(p[grp[i]] * z[i, t])
-    
-   } # end t loop
-  } # end i loop
-  
-  # Derived parameters
-  delta.p <- p[1] - p[2]
-    
-} # end model
-    ", fill = TRUE)
-
-sink()
-
-```
-
-```{r}
-
-## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
-## The `apply` function allows us to apply this function to each row (MARGIN = 1)
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
-
-grp <- 1 + rbern(500)
-
-## Bundle data
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1,
-                  grp = grp)
-
-```
-
-```{r}
-
-z.init <- matrix(NA, nrow = 500, ncol = 6)
-
-for(i in 1:dim(z.init)[1]){
-  z.init[i, f1[i]:dim(z.init)[2]] <- 1
-  z.init[i,f1[i]] <- NA
-}
-
-### Initial values
-inits <- function(){list(phi = runif(1), 
-                         p = runif(2),
-                         z = z.init)}
-
-### Parameters
-params <- c("phi", "p", "delta.p")
-
-
-### MCMC settings
-nc <- 3
-ni <- 15000
-nb <- 2500
-nt <- 1
-
-
-dipper1 <- jagsUI::jags(data = jags.data, 
-                        inits = inits, 
-                        parameters.to.save = params,
-                        model.file = "cjs.grp.jags", 
-                        n.chains = nc, 
-                        n.iter = ni, 
-                        n.burnin = nb, 
-                        n.thin = nt,
-                        parallel = TRUE)
-
-jagsUI::traceplot(dipper1)
-print(dipper1)
-
-```
-
-
-```{r}
-
-sink("CJS.t.t.txt")
+sink("model.7.4.1.jags")
 
 cat("
     
@@ -408,10 +358,10 @@ cat("
     
     for (i in 1:nInd) {
     
-      for (t in f1[i]:(nOcc - 1)) {
+      for (t in f[i]:(nOcc - 1)) {
       
-        phi[i,t] <- alpha[t]
-        p[i,t] <- beta[t]
+        phi[i, t] <- alpha[t]
+        p[i, t] <- beta[t]
         
       }
       
@@ -419,8 +369,8 @@ cat("
     
     for (t in 1:(nOcc - 1)) {
       
-        alpha[t] ~ dunif(0,1)
-        beta[t] ~ dunif(0,1)
+        alpha[t] ~ dunif(0, 1)
+        beta[t] ~ dunif(0, 1)
         
       }
 
@@ -431,19 +381,19 @@ cat("
     
       # define latent state at first capture
       
-      z[i,f1[i]] <- 1
+      z[i, f[i]] <- 1
       
-      for (t in (f1[i] + 1):nOcc) {
+      for (t in (f[i] + 1):nOcc) {
       
         # state process
         
-        z[i,t] ~ dbern(mu1[i,t])
-        mu1[i,t] <- phi[i,t-1] * z[i,t-1]
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]
         
         # observation process
         
-        y[i,t] ~ dbern(mu2[i,t])
-        mu2[i,t] <- p[i,t-1] * z[i,t]
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]
         
       }
     
@@ -459,25 +409,19 @@ sink()
 
 ```{r}
 
-## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
-## The `apply` function allows us to apply this function to each row (MARGIN = 1)
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
 
 ## Bundle data
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1)
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f)
 
-```
-
-```{r}
 
 z.init <- matrix(NA, nrow = 500, ncol = 6)
 
 for(i in 1:dim(z.init)[1]){
-  z.init[i, f1[i]:dim(z.init)[2]] <- 1
-  z.init[i,f1[i]] <- NA
+  z.init[i, f[i]:dim(z.init)[2]] <- 1
+  z.init[i,f[i]] <- NA
 }
 
 ### Initial values
@@ -496,153 +440,45 @@ nb <- 2500
 nt <- 1
 
 
-dipper1 <- jagsUI::jags(data = jags.data, 
+model.7.4.1 <- jagsUI::jags(data = jags.data, 
                         inits = inits, 
                         parameters.to.save = params,
-                        model.file = "CJS.t.t.txt", 
+                        model.file = "model.7.4.1.jags", 
                         n.chains = nc, 
                         n.iter = ni, 
                         n.burnin = nb, 
                         n.thin = nt,
                         parallel = TRUE)
 
-jagsUI::traceplot(dipper1)
-print(dipper1)
+
+jagsUI::traceplot(model.7.4.1)
+
+
+print(model.7.4.1)
+
+
+plot(model.7.4.1)
+
+## note that phi[5] and p[5] are not individually identifiable
 
 ```
-
-
-```{r}
-
-sink("CJS.t.c.txt")
-
-cat("
-    
-  model {
-  
-    # priors
-    
-    for (i in 1:nInd) {
-    
-      for (t in f1[i]:(nOcc - 1)) {
-      
-        phi[i,t] <- alpha[t]
-        
-      }
-      
-    }
-    
-    for (t in 1:(nOcc - 1)) {
-      
-        alpha[t] ~ dunif(0,1)
-
-      }
-
-    p ~ dunif(0,1)
-
-    
-    # likelihood
-    
-    for (i in 1:nInd) {
-    
-      # define latent state at first capture
-      
-      z[i,f1[i]] <- 1
-      
-      for (t in (f1[i] + 1):nOcc) {
-      
-        # state process
-        
-        z[i,t] ~ dbern(mu1[i,t])
-        mu1[i,t] <- phi[i,t-1] * z[i,t-1]
-        
-        # observation process
-        
-        y[i,t] ~ dbern(mu2[i,t])
-        mu2[i,t] <- p * z[i,t]
-        
-      }
-    
-    }
-  
-  }
-  
-  ", fill = TRUE)
-
-sink()
-
-```
-
-```{r}
-
-## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
-## The `apply` function allows us to apply this function to each row (MARGIN = 1)
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
-
-## Bundle data
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1)
-
-```
-
-```{r}
-
-z.init <- matrix(NA, nrow = 500, ncol = 6)
-
-for(i in 1:dim(z.init)[1]){
-  z.init[i, f1[i]:dim(z.init)[2]] <- 1
-  z.init[i,f1[i]] <- NA
-}
-
-### Initial values
-inits <- function(){list(alpha = runif(5), 
-                         p = runif(1),
-                         z = z.init)}
-
-### Parameters
-params <- c("alpha", "p")
-
-
-### MCMC settings
-nc <- 3
-ni <- 10000
-nb <- 2500
-nt <- 1
-
-
-dipper1 <- jagsUI::jags(data = jags.data, 
-                        inits = inits, 
-                        parameters.to.save = params,
-                        model.file = "CJS.t.c.txt", 
-                        n.chains = nc, 
-                        n.iter = ni, 
-                        n.burnin = nb, 
-                        n.thin = nt,
-                        parallel = TRUE)
-
-jagsUI::traceplot(dipper1)
-print(dipper1)
-
-```
-
 ## Simulate random time effects
 
 ```{r}
+
 n.occasions <- 20
-marked <- rep(30, n.occasions - 1)
-mean.phi <- 0.65
+n <- rep(30, n.occasions - 1)
+mean.phi <- 0.85
 var.phi <- 1
 p <- rep(0.4, n.occasions - 1)
 
 logit.phi <- rnorm(n.occasions - 1, qlogis(mean.phi), var.phi ^ 0.5)
 phi <- plogis(logit.phi)
 
-PHI <- matrix(phi, ncol = n.occasions - 1, nrow = sum(marked), byrow = T)
-P <- matrix(p, ncol = n.occasions -1, nrow = sum(marked))
+phi.matrix <- matrix(phi, ncol = n.occasions - 1, nrow = sum(n), byrow = T)
+p.matrix <- matrix(p, ncol = n.occasions -1, nrow = sum(n))
 
-CH <- simCJS(PHI, P, marked)
+ch <- simulateHistoriesCJS(phi.matrix, p.matrix, n)
 
 
 ```
@@ -650,7 +486,7 @@ CH <- simCJS(PHI, P, marked)
 
 ```{r}
 
-sink("CJS.ret.c.txt")
+sink("model.7.4.2.jags")
 
 cat("
     
@@ -691,9 +527,9 @@ cat("
     
       # define latent state at first capture
       
-      z[i,f1[i]] <- 1
+      z[i,f[i]] <- 1
       
-      for (t in (f1[i] + 1):nOcc) {
+      for (t in (f[i] + 1):nOcc) {
       
         # state process
         
@@ -720,52 +556,22 @@ sink()
 
 ```{r}
 
-## The function min(which(x==1)) first returns which elements in the vector are 1 and then return the minimum of those values
-## The `apply` function allows us to apply this function to each row (MARGIN = 1)
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
 
+f <- idFirstCaptureCJS(ch)
 
-z <- knownStatesCJS(CH)
+z <- idKnownStatesCJS(ch)
 
 
 ## Bundle data
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1,
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
                   z = z)
 
-```
 
-```{r}
+z.init.cjs <- createZInitsCJS(ch, f)
 
-
-
-## this allows for more efficient computation by providing information on z
-
-createZInitsCJS <- function(ch, f1) {
-  
-  for ( i in 1:dim(ch)[1]) {
-    
-    if (sum(ch[i, ]) == 1) next
-    n2 <- max(which(ch[i, ] == 1))
-    ch[i, f1[i]:n2] <- NA
-    
-  }
-  
-  for (i in 1:dim(ch)[1]) {
-    
-    ch[i, 1:f1[i]] <- NA
-    
-  }
-  
-  return(ch)
-  
-}
-
-
-z.init.cjs <- createZInitsCJS(CH, f1)
-  
   
 ### Initial values
 inits <- function(){list(phi.mu = rnorm(1, 0, 0.01),
@@ -781,21 +587,27 @@ params <- c("phi.mean", "phi.sd", "p", "phi")
 nc <- 3
 ni <- 10000
 nb <- 5000
-nt <- 3
+nt <- 5
 
 
-dipper1 <- jagsUI::jags(data = jags.data, 
+model.7.4.2 <- jagsUI::jags(data = jags.data, 
                         inits = inits, 
                         parameters.to.save = params,
-                        model.file = "CJS.ret.c.txt", 
+                        model.file = "model.7.4.2.jags", 
                         n.chains = nc, 
                         n.iter = ni, 
                         n.burnin = nb, 
                         n.thin = nt,
                         parallel = TRUE)
 
-jagsUI::traceplot(dipper1)
-print(dipper1)
+
+jagsUI::traceplot(model.7.4.2)
+
+
+print(model.7.4.2)
+
+
+plot(model.7.4.2)
 
 ```
 
@@ -806,7 +618,7 @@ print(dipper1)
 ## Simulate covariate effects (and residual error)
 
 n.occasions <- 20
-marked <- rep(15, n.occasions - 1)
+n <- rep(15, n.occasions - 1)
 mean.phi <- 0.65
 p <- rep(0.4, n.occasions - 1)
 beta <- -0.3
@@ -816,39 +628,39 @@ r.var <- 0.2
 winter <- rnorm(n.occasions -1, 0, 1 ^ 0.5)
 
 
-logit.phi <- qlogis(mean.phi) + beta*winter + rnorm(n.occasions -1, 0, r.var ^ 0.5)
+logit.phi <- qlogis(mean.phi) + beta * winter + rnorm(n.occasions - 1, 0, r.var ^ 0.5)
 phi <- plogis(logit.phi)
 
 
-PHI <- matrix(phi, ncol = n.occasions - 1, nrow = sum(marked), byrow = T)
-P <- matrix(p, ncol = n.occasions -1, nrow = sum(marked))
+phi.matrix <- matrix(phi, ncol = n.occasions - 1, nrow = sum(n), byrow = T)
+p.matrix <- matrix(p, ncol = n.occasions - 1, nrow = sum(n))
 
 # make capture histories
 
-CH <- simCJS(PHI, P, marked)
+ch <- simulateHistoriesCJS(phi.matrix, p.matrix, n)
 
 
 # identify first capture occasion
 
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
+f <- idFirstCaptureCJS(ch)
 
 
 # idenitfy known states
 
-z <- knownStatesCJS(CH)
+z <- idKnownStatesCJS(ch)
 
 
 # Bundle data
 
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1,
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
                   z = z,
                   x = winter)
 
 
-sink("CJS.cov.ret.c.txt")
+sink("model.7.4.3.jags")
 
 cat("
     
@@ -880,9 +692,9 @@ cat("
     
       # define latent state at first capture
       
-      z[i,f1[i]] <- 1
+      z[i,f[i]] <- 1
       
-      for (t in (f1[i] + 1):nOcc) {
+      for (t in (f[i] + 1):nOcc) {
       
         # state process
         
@@ -907,7 +719,7 @@ sink()
 
 
 
-z.init.cjs <- createZInitsCJS(CH, f1)
+z.init.cjs <- createZInitsCJS(ch, f)
   
   
 ### Initial values
@@ -928,18 +740,24 @@ nb <- 10000
 nt <- 10
 
 
-m.7.4.3 <- jagsUI::jags(data = jags.data, 
+model.7.4.3 <- jagsUI::jags(data = jags.data, 
                         inits = inits, 
                         parameters.to.save = params,
-                        model.file = "CJS.cov.ret.c.txt", 
+                        model.file = "model.7.4.3.jags", 
                         n.chains = nc, 
                         n.iter = ni, 
                         n.burnin = nb, 
                         n.thin = nt,
                         parallel = TRUE)
 
-jagsUI::traceplot(m.7.4.3)
-print(m.7.4.3)
+
+jagsUI::traceplot(model.7.4.3)
+
+
+print(model.7.4.3)
+
+
+plot(model.7.4.3)
 
 ```
 
@@ -947,122 +765,119 @@ print(m.7.4.3)
 
 ```{r}
 
-## Simulate covariate effects (and residual error)
-
-n.occasions <- 20
-marked <- rep(15, n.occasions - 1)
-mean.phi <- 0.65
-p <- rep(0.4, n.occasions - 1)
-beta <- -0.3
-r.var <- 0.2
-
-
-winter <- rnorm(n.occasions -1, 0, 1 ^ 0.5)
-
-
-logit.phi <- qlogis(mean.phi) + beta*winter + rnorm(n.occasions -1, 0, r.var ^ 0.5)
-phi <- plogis(logit.phi)
-
-
-PHI <- matrix(phi, ncol = n.occasions - 1, nrow = sum(marked), byrow = T)
-P <- matrix(p, ncol = n.occasions -1, nrow = sum(marked))
-
-# make capture histories
-
-CH <- simCJS(PHI, P, marked)
-
-
-# identify first capture occasion
-
-f1 <- apply(X = CH, MARGIN = 1, FUN = function(x) min(which(x == 1)))
-
-
-# idenitfy known states
-
-z <- knownStatesCJS(CH)
-
-
-# Bundle data
-
-jags.data <- list(y = CH, 
-                  nInd = dim(CH)[1], 
-                  nOcc = dim(CH)[2], 
-                  f1 = f1,
-                  z = z,
-                  x = winter)
-
-
-sink("CJS.cov.ret.c.txt")
+sink("model.7.5.1.jags")
 
 cat("
-    
-  model {
+
+model {
   
-    # priors
-    
-    ### NOTE I have changed the code here to make it less confusing to me
-    
-    for (t in 1:(nOcc - 1)) {
-      
-        logit(phi[t]) <- phi.mu + beta * x[t] + eps[t]
-        eps[t] ~ dnorm(0, phi.tau)
-
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        phi[i, t] <- phi.g[group[i]]
+        p[i, t] <- p.g[group[i]]
       }
+    }
+  
+    for(u in 1:g){
+      phi.g[u] ~ dunif(0, 1)
+      p.g[u] ~ dunif(0, 1)
+    }
 
-    beta ~ dnorm(0, 0.01)
-    phi.mu ~ dnorm(0, 0.01)
-    phi.mean <- ilogit(phi.mu)
-    phi.sd ~ dunif(0, 10)
-    phi.tau <- pow(phi.sd, -2) 
-    
-    p ~ dunif(0,1)
 
-    
     # likelihood
     
     for (i in 1:nInd) {
     
       # define latent state at first capture
       
-      z[i,f1[i]] <- 1
+      z[i, f[i]] <- 1
       
-      for (t in (f1[i] + 1):nOcc) {
+      for (t in (f[i] + 1):nOcc) {
       
         # state process
         
-        z[i,t] ~ dbern(mu1[i,t])
-        mu1[i,t] <- phi[t-1] * z[i,t-1]     ### NOTE I have changed the code here to make it less confusing to me
-
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
         
         # observation process
         
-        y[i,t] ~ dbern(mu2[i,t])
-        mu2[i,t] <- p * z[i,t]      ### NOTE I have changed the code here to make it less confusing to me
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
         
       }
-    
     }
-  
-  }
-  
-  ", fill = TRUE)
+    
+    delta.phi <- phi.g[1] - phi.g[2]
+    delta.p <- p.g[1] - p.g[2]
+    
+}
+", fill = TRUE)
+
 
 sink()
 
 
+```
 
-z.init.cjs <- createZInitsCJS(CH, f1)
+```{r}
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 12
+n <- rep(30, n.occasions - 1)
+phi.f <- rep(0.65, n.occasions - 1)
+p.f <- rep(0.4, n.occasions - 1)
+phi.m <- rep(0.8, n.occasions - 1)
+p.m <- rep(0.3, n.occasions - 1)
+phi.f.matrix <- matrix(phi.f, ncol = n.occasions - 1, nrow = sum(n))
+p.f.matrix <- matrix(p.f, ncol = n.occasions - 1, nrow = sum(n))
+phi.m.matrix <- matrix(phi.m, ncol = n.occasions - 1, nrow = sum(n))
+p.m.matrix <- matrix(p.m, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch.f <- simulateHistoriesCJS(phi.f.matrix, p.f.matrix, n)
+ch.m <- simulateHistoriesCJS(phi.m.matrix, p.m.matrix, n)
+ch <- rbind(ch.f, ch.m)
+
+
+grp <- c(rep(1, dim(ch.f)[1]), rep(2, dim(ch.m)[1]))
+
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  g = length(unique(grp)),
+                  group = grp)
+
+
+
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
   
   
 ### Initial values
-inits <- function(){list(phi.mu = rnorm(1, 0, 0.01),
-                         phi.sd = runif(1, 0, 10),
-                         p = runif(1),
-                         beta = rnorm(1, -5, 5),
+inits <- function(){list(phi.g = runif(2, 0, 1),
+                         p.g = runif(2, 0, 1),
                          z = z.init.cjs)}
 
+
 ### Parameters
-params <- c("phi.mean", "phi.sd", "p", "phi", "beta")
+params <- c("phi.g", "p.g", "delta.phi", "delta.p")
 
 
 ### MCMC settings
@@ -1072,17 +887,1106 @@ nb <- 10000
 nt <- 10
 
 
-m.7.4.3 <- jagsUI::jags(data = jags.data, 
+model.7.5.1 <- jagsUI::jags(data = jags.data, 
                         inits = inits, 
                         parameters.to.save = params,
-                        model.file = "CJS.cov.ret.c.txt", 
+                        model.file = "model.7.5.1.jags", 
                         n.chains = nc, 
                         n.iter = ni, 
                         n.burnin = nb, 
                         n.thin = nt,
                         parallel = TRUE)
 
-jagsUI::traceplot(m.7.4.3)
-print(m.7.4.3)
+
+jagsUI::traceplot(model.7.5.1)
+
+
+print(model.7.5.1)
+
+
+plot(model.7.5.1)
 
 ```
+
+## Model 7.5.2 Random group efects
+
+```{r}
+
+sink("model.7.5.2.jags")
+
+cat("
+
+model {
+  
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- beta[group[i]]
+        p[i, t] <- p.mu
+      }
+    }
+  
+    for(u in 1:g){
+      beta[u] ~ dnorm(beta.mu, beta.tau)
+      phi.g[u] <- ilogit(beta[u])
+
+    }
+
+    p.mu ~ dunif(0, 1)
+    beta.mu ~ dnorm(0, 0.01)
+    beta.sd ~ dunif(0, 5)
+    beta.tau <- pow(beta.sd, -2)
+    phi.mu <- ilogit(beta.mu)
+
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+    
+    }
+    
+}
+", fill = TRUE)
+
+
+sink()
+
+
+
+
+```
+
+```{r}
+
+n.occasions <- 12
+n <- rep(30, n.occasions - 1)
+phi.f <- rep(0.65, n.occasions - 1)
+p.f <- rep(0.4, n.occasions - 1)
+phi.m <- rep(0.8, n.occasions - 1)
+p.m <- rep(0.3, n.occasions - 1)
+phi.f.matrix <- matrix(phi.f, ncol = n.occasions - 1, nrow = sum(n))
+p.f.matrix <- matrix(p.f, ncol = n.occasions - 1, nrow = sum(n))
+phi.m.matrix <- matrix(phi.m, ncol = n.occasions - 1, nrow = sum(n))
+p.m.matrix <- matrix(p.m, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch.f <- simulateHistoriesCJS(phi.f.matrix, p.f.matrix, n)
+ch.m <- simulateHistoriesCJS(phi.m.matrix, p.m.matrix, n)
+ch <- rbind(ch.f, ch.m)
+
+
+grp <- c(rep(1, dim(ch.f)[1]), rep(2, dim(ch.m)[1]))
+
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  g = length(unique(grp)),
+                  group = grp)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+
+
+### Initial values
+inits <- function(){list(beta.mu = rnorm(1, 0, 0.01),
+                         beta.sd = runif(1, 0, 5),
+                         p.mu = runif(1, 0, 1),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("p.mu", "phi.mu", "phi.g",  "beta.sd")
+
+
+### MCMC settings
+nc <- 3
+ni <- 20000
+nb <- 10000
+nt <- 10
+
+
+model.7.5.2 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.5.2.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.5.2)
+
+
+print(model.7.5.2)
+
+
+plot(model.7.5.2)
+
+
+```
+## Model 7.5.3 Random individual effects
+
+```{r}
+
+sink("model.7.5.3.jags")
+
+cat("
+
+model {
+  
+    for (i in 1:nInd) {
+      eps[i] ~ dnorm(0, eps.tau)
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- mu + eps[i]
+        p[i, t] <- p.mu
+      }
+    }
+    
+    #for(i in 1:nInd) {
+    #  eps[i] ~ dnorm(0, eps.tau)
+    #}
+
+    p.mu ~ dunif(0, 1)
+    mu ~ dnorm(0, 0.01)
+    eps.sd ~ dunif(0, 5)
+    eps.tau <- pow(eps.sd, -2)
+    phi.mu <- ilogit(mu)
+
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+    
+    }
+    
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+
+```{r}
+
+n.occasions <- 20
+n <- rep(30, n.occasions - 1)
+mean.phi <- 0.65
+p <- rep(0.3, n.occasions - 1)
+v.ind <- 0.5
+
+logit.phi <- rnorm(sum(n), qlogis(mean.phi), v.ind ^ 0.5)
+phi <- plogis(logit.phi)
+
+hist(phi, nclass = 25)
+
+phi.matrix <- matrix(phi, ncol = n.occasions - 1, nrow = sum(n), byrow = F)
+p.matrix <- matrix(p, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch <- simulateHistoriesCJS(phi.matrix, p.matrix, n)
+
+f <- idFirstCaptureCJS(ch)
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+
+
+### Initial values
+inits <- function(){list(mu = rnorm(1, 0, 0.01),
+                         eps.sd = runif(1, 0, 5),
+                         p.mu = runif(1, 0, 1),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("p.mu", "phi.mu", "eps.sd")
+
+
+### MCMC settings
+nc <- 3
+ni <- 50000
+nb <- 20000
+nt <- 30
+
+
+model.7.5.3 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.5.3.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.5.3)
+
+
+print(model.7.5.3)
+
+
+plot(model.7.5.3)
+
+```
+
+## 7.6.1 fixed group and time effects
+
+```{r}
+
+sink("model.7.6.1.jags")
+
+cat("
+
+model {
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- beta[group[i]] + gamma[t]
+        p[i, t] <- p.g[group[i]]
+      }
+    }
+
+    for (t in 1:(nOcc - 1)){
+      gamma[t] ~ dnorm(0, 0.01)
+      phi.g1[t] <- ilogit(gamma[t])
+      phi.g2[t] <- ilogit(gamma[t] + beta[2])
+    }
+    
+    beta[1] <- 0
+    beta[2] ~ dnorm(0, 0.01)
+      
+    for (u in 1:g){
+      p.g[u] ~ dunif(0, 1)
+    }
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 12
+n <- rep(50, n.occasions - 1)
+phi.f <- c(0.6, 0.5, 0.55, 0.6, 0.5, 0.4, 0.6, 0.5, 0.55, 0.6, 0.7)
+p.f <- rep(0.6, n.occasions - 1)
+diff <- 0.5
+phi.m <- plogis(qlogis(phi.f) + diff)
+p.m <- rep(0.3, n.occasions - 1)
+phi.f.matrix <- matrix(phi.f, ncol = n.occasions - 1, nrow = sum(n))
+p.f.matrix <- matrix(p.f, ncol = n.occasions - 1, nrow = sum(n))
+phi.m.matrix <- matrix(phi.m, ncol = n.occasions - 1, nrow = sum(n))
+p.m.matrix <- matrix(p.m, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch.f <- simulateHistoriesCJS(phi.f.matrix, p.f.matrix, n)
+ch.m <- simulateHistoriesCJS(phi.m.matrix, p.m.matrix, n)
+ch <- rbind(ch.f, ch.m)
+
+
+grp <- c(rep(1, dim(ch.f)[1]), rep(2, dim(ch.m)[1]))
+
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  g = length(unique(grp)),
+                  group = grp)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(p.g = runif(2, 0, 1),
+                         z = z.init.cjs,
+                         gamma = rnorm(11),
+                         beta = c(NA, rnorm(1)))}
+
+
+### Parameters
+params <- c("phi.g1", "phi.g2", "p.g", "beta")
+
+
+### MCMC settings
+nc <- 3
+ni <- 20000
+nb <- 5000
+nt <- 5
+
+
+model.7.6.1 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.6.1.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.6.1)
+
+
+print(model.7.6.1)
+
+
+plot(model.7.6.1)
+
+
+```
+
+## 7.6.1 fixed group and time effects with interaction
+
+```{r}
+
+sink("model.7.6.1.interaction.jags")
+
+cat("
+
+model {
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        phi[i, t] <- eta.phi[group[i], t]
+        p[i, t] <- p.g[group[i]]
+      }
+    }
+      
+    for (u in 1:g){
+      p.g[u] ~ dunif(0, 1)
+      for (t in 1:(nOcc - 1)) {
+        eta.phi[u, t] ~ dunif(0, 1)
+      }
+    }
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 12
+n <- rep(50, n.occasions - 1)
+phi.f <- c(0.6, 0.5, 0.55, 0.6, 0.5, 0.4, 0.6, 0.5, 0.55, 0.6, 0.7)
+p.f <- rep(0.6, n.occasions - 1)
+diff <- 0.5
+phi.m <- plogis(qlogis(phi.f) + diff)
+p.m <- rep(0.3, n.occasions - 1)
+phi.f.matrix <- matrix(phi.f, ncol = n.occasions - 1, nrow = sum(n))
+p.f.matrix <- matrix(p.f, ncol = n.occasions - 1, nrow = sum(n))
+phi.m.matrix <- matrix(phi.m, ncol = n.occasions - 1, nrow = sum(n))
+p.m.matrix <- matrix(p.m, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch.f <- simulateHistoriesCJS(phi.f.matrix, p.f.matrix, n)
+ch.m <- simulateHistoriesCJS(phi.m.matrix, p.m.matrix, n)
+ch <- rbind(ch.f, ch.m)
+
+
+grp <- c(rep(1, dim(ch.f)[1]), rep(2, dim(ch.m)[1]))
+
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  g = length(unique(grp)),
+                  group = grp)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(p.g = runif(2, 0, 1),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("eta.phi", "p.g")
+
+
+### MCMC settings
+nc <- 3
+ni <- 20000
+nb <- 5000
+nt <- 5
+
+
+model.7.6.1.int <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.6.1.interaction.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.6.1.int)
+
+
+print(model.7.6.1.int)
+
+
+plot(model.7.6.1.int)
+
+
+```
+
+## 7.6.2 fixed group and random time effects
+
+```{r}
+
+sink("model.7.6.2.jags")
+
+cat("
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- phi.eta[group[i], t]
+        p[i, t] <- p.g[group[i]]
+      }
+    }
+
+    # for survival parameters
+    
+    for (u in 1:g) {
+      for (t in 1:(nOcc - 1)){
+        phi.eta[u, t] <- phi.mu[u] + eps[u, t]
+        eps[u, t] ~ dnorm(0, phi.tau[u])
+      }
+      phi.g[u] ~ dunif(0, 1) 
+      phi.mu[u] <- logit(phi.g[u])
+      phi.sd[u] ~ dunif(0, 10)
+      phi.tau[u] <- pow(phi.sd[u], -2)
+    }
+    
+    for (u in 1:g){
+      p.g[u] ~ dunif(0, 1)
+    }
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 12
+n <- rep(50, n.occasions - 1)
+phi.f <- c(0.6, 0.5, 0.55, 0.6, 0.5, 0.4, 0.6, 0.5, 0.55, 0.6, 0.7)
+p.f <- rep(0.6, n.occasions - 1)
+diff <- 0.5
+phi.m <- plogis(qlogis(phi.f) + diff)
+p.m <- rep(0.3, n.occasions - 1)
+phi.f.matrix <- matrix(phi.f, ncol = n.occasions - 1, nrow = sum(n))
+p.f.matrix <- matrix(p.f, ncol = n.occasions - 1, nrow = sum(n))
+phi.m.matrix <- matrix(phi.m, ncol = n.occasions - 1, nrow = sum(n))
+p.m.matrix <- matrix(p.m, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch.f <- simulateHistoriesCJS(phi.f.matrix, p.f.matrix, n)
+ch.m <- simulateHistoriesCJS(phi.m.matrix, p.m.matrix, n)
+ch <- rbind(ch.f, ch.m)
+
+
+grp <- c(rep(1, dim(ch.f)[1]), rep(2, dim(ch.m)[1]))
+
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  g = length(unique(grp)),
+                  group = grp)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(p.g = runif(2, 0, 1),
+                         phi.g = runif(2, 0, 1),
+                         phi.sd = runif(2, 0, 10),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("phi.g", "p.g", "eps", "phi.sd")
+
+
+### MCMC settings
+nc <- 3
+ni <- 20000
+nb <- 5000
+nt <- 5
+
+
+model.7.6.2 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.6.2.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.6.2)
+
+
+print(model.7.6.2)
+
+
+plot(model.7.6.2)
+
+
+```
+
+## 7.6.2 fixed group and correlated random time effects
+
+```{r}
+
+sink("model.7.6.2.correlated.jags")
+
+cat("
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- phi.eta[t, group[i]]
+        p[i, t] <- p.g[group[i]]
+      }
+    }
+
+    # for survival parameters
+    
+    for (t in 1:(nOcc - 1)){
+      phi.eta[t, 1:g] ~ dmnorm(phi.mu[], omega[ , ])
+    }
+      
+    for (u in 1:g) {
+      phi.g[u] ~ dunif(0, 1) 
+      phi.mu[u] <- logit(phi.g[u])
+    }
+    
+    omega[1:g, 1:g] ~ dwish(R[, ], df)
+    sigma[1:g, 1:g] <- inverse(omega[, ])
+    
+    # for recapture parameters
+    
+    for (u in 1:g){
+      p.g[u] ~ dunif(0, 1)
+    }
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 12
+n <- rep(50, n.occasions - 1)
+phi.f <- c(0.6, 0.5, 0.55, 0.6, 0.5, 0.4, 0.6, 0.5, 0.55, 0.6, 0.7)
+p.f <- rep(0.6, n.occasions - 1)
+diff <- 0.5
+phi.m <- plogis(qlogis(phi.f) + diff)
+p.m <- rep(0.3, n.occasions - 1)
+phi.f.matrix <- matrix(phi.f, ncol = n.occasions - 1, nrow = sum(n))
+p.f.matrix <- matrix(p.f, ncol = n.occasions - 1, nrow = sum(n))
+phi.m.matrix <- matrix(phi.m, ncol = n.occasions - 1, nrow = sum(n))
+p.m.matrix <- matrix(p.m, ncol = n.occasions - 1, nrow = sum(n))
+
+
+ch.f <- simulateHistoriesCJS(phi.f.matrix, p.f.matrix, n)
+ch.m <- simulateHistoriesCJS(phi.m.matrix, p.m.matrix, n)
+ch <- rbind(ch.f, ch.m)
+
+
+grp <- c(rep(1, dim(ch.f)[1]), rep(2, dim(ch.m)[1]))
+
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  g = length(unique(grp)),
+                  group = grp,
+                  R = matrix(c(5, 0, 0, 1), ncol = 2), 
+                  df = 3)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(p.g = runif(2, 0, 1),
+                         omega = matrix(c(1, 0, 0, 1), ncol = 2),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("phi.eta", "p.g", "sigma", "phi.g")
+
+
+### MCMC settings
+nc <- 3
+ni <- 20000
+nb <- 5000
+nt <- 5
+
+
+model.7.6.2.corr <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.6.2.correlated.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.6.2.corr)
+
+
+print(model.7.6.2.corr)
+
+
+plot(model.7.6.2.corr)
+
+
+```
+## Model 7.7 age effects
+
+```{r}
+
+sink("model.7.7.1.jags")
+
+cat("
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        phi[i, t] <- beta[x[i, t]]
+        p[i, t] <- p.mu
+      }
+    }
+    
+    # for survival parameters
+    
+    for (u in 1:2){
+      beta[u] ~ dunif(0, 1)
+    }
+      
+    # for recapture parameters
+    
+    p.mu ~ dunif(0, 1)
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 10
+n.j <- rep(200, n.occasions - 1)
+n.a <- rep(30, n.occasions - 1)
+phi.juv <- 0.3
+phi.ad <- 0.65
+p <- rep(0.5, n.occasions - 1)
+phi.j <- c(phi.juv, rep(phi.ad, n.occasions - 2))
+phi.a <- rep(phi.ad, n.occasions - 1)
+
+phi.j.matrix <- matrix(0, ncol = n.occasions - 1, nrow = sum(n.j))
+
+for (i in 1:length(n.j)){
+  phi.j.matrix[(sum(n.j[1:i]) - n.j[i] + 1):sum(n.j[1:i]), i:(n.occasions - 1)] <- matrix(rep(phi.j[1:(n.occasions - i)], n.j[i]), ncol = n.occasions - i, byrow = T)
+}
+  
+p.j.matrix <- matrix(rep(p, sum(n.j)), ncol = n.occasions - 1, nrow = sum(n.j), byrow = T)
+phi.a.matrix <- matrix(rep(phi.a, sum(n.a)), ncol = n.occasions - 1, nrow = sum(n.a), byrow = T)
+p.a.matrix <- matrix(rep(p, sum(n.a)), ncol = n.occasions - 1, nrow = sum(n.a), byrow = T)
+
+
+ch.j <- simulateHistoriesCJS(phi.j.matrix, p.j.matrix, n.j)
+ch.a <- simulateHistoriesCJS(phi.a.matrix, p.a.matrix, n.a)
+ch <- rbind(ch.j, ch.a)
+
+
+x.j <- matrix(NA, ncol = dim(ch.j)[2] - 1, nrow = dim(ch.j)[1])
+x.a <- matrix(NA, ncol = dim(ch.a)[2] - 1, nrow = dim(ch.a)[1])
+
+
+f.j <- idFirstCaptureCJS(ch.j)
+f.a <- idFirstCaptureCJS(ch.a)
+
+
+for (i in 1:dim(ch.j)[1]) {
+  for (t in f.j[i]:(dim(ch.j)[2] - 1)) {
+    x.j[i, t] <- 2
+    x.j[i, f.j[i]] <- 1
+  }
+}
+
+for (i in 1:dim(ch.a)[1]) {
+  for (t in f.a[i]:(dim(ch.a)[2] - 1)){
+    x.a[i, t] <- 2    
+  }
+}
+
+x <- rbind(x.j, x.a)
+
+# identify first capture occasion
+
+f <- idFirstCaptureCJS(ch)
+
+
+# idenitfy known states
+
+z <- idKnownStatesCJS(ch)
+
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  x = x)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(beta = runif(2, 0, 1),
+                         p.mu = runif(1, 0, 1),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("beta", "p.mu")
+
+
+### MCMC settings
+nc <- 3
+ni <- 5000
+nb <- 2000
+nt <- 5
+
+
+model.7.7.1 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.7.1.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.7.1)
+
+
+print(model.7.7.1)
+
+
+plot(model.7.7.1)
+
+
+```
+
+
