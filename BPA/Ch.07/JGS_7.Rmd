@@ -1988,5 +1988,449 @@ plot(model.7.7.1)
 
 
 ```
+## 7.7.2 continuous age model
+
+```{r}
+
+
+x <- matrix(NA, ncol = dim(ch)[2] - 1, nrow = dim(ch)[1])
+
+for (i in 1:dim(ch)[1]){
+  for (t in f[i]:(dim(ch)[2] - 1)){
+    x[i,t] <- t-f[i]+1
+  }
+}
+
+
+```
+
+
+```{r}
+
+sink("model.7.7.2.jags")
+
+cat("
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- phi.mu + beta * x[i, t]
+        p[i, t] <- p.mu
+      }
+    }
+    
+    # for survival parameters
+    
+    phi.mu ~ dnorm(0, 0.01)
+    beta ~ dnorm(0, 0.01)
+    
+    # backtransform estimates
+    
+    for (i in 1:(nOcc - 1)) {
+      phi.age[i] <- ilogit(phi.mu + beta * i)
+    }
+      
+    # for recapture parameters
+    
+    p.mu ~ dunif(0, 1)
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  x = x)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(beta = rnorm(1, 0, 1),
+                         p.mu = runif(1, 0, 1),
+                         phi.mu = runif(1, 0, 1),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("beta", "p.mu", "phi.age")
+
+
+### MCMC settings
+nc <- 3
+ni <- 5000
+nb <- 2000
+nt <- 5
+
+
+model.7.7.2 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.7.2.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.7.2)
+
+
+print(model.7.7.2)
+
+
+plot(model.7.7.2)
+
+
+
+```
+
+## Model 7.8.1 trap response
+
+```{r}
+
+ch <- as.matrix(read.table(file = "trap.txt", sep = " "))
+
+
+f <- idFirstCaptureCJS(ch)
+
+
+m <- ch[, 1:(dim(ch)[2] - 1)]
+u <- which(m==0)
+m[u] <- 2
+
+z <- idKnownStatesCJS(ch)
+
+```
+
+
+```{r}
+
+sink("model.7.8.1.jags")
+
+cat("
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        phi[i, t] <- phi.mu
+        p[i, t] <- beta[m[i,t]]
+      }
+    }
+    
+    # for survival parameters
+    
+    phi.mu ~ dunif(0, 1)
+
+    # for recapture parameters
+    
+    for (u in 1:2) {
+      beta[u] ~ dunif(0, 1)
+    }
+        
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+", fill = TRUE)
+
+
+sink()
+
+```
+
+```{r}
+
+# Bundle data
+
+jags.data <- list(y = ch, 
+                  nInd = dim(ch)[1], 
+                  nOcc = dim(ch)[2], 
+                  f = f,
+                  z = z,
+                  m = m)
+
+
+z.init.cjs <- createZInitsCJS(ch, f)
+  
+  
+### Initial values
+inits <- function(){list(beta = runif(2, 0, 1),
+                         phi.mu = runif(1, 0, 1),
+                         z = z.init.cjs)}
+
+
+### Parameters
+params <- c("beta", "phi.mu")
+
+
+### MCMC settings
+nc <- 3
+ni <- 20000
+nb <- 10000
+nt <- 5
+
+
+model.7.8.1 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.8.1.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.8.1)
+
+
+print(model.7.8.1)
+
+
+plot(model.7.8.1)
+
+
+
+```
+## Model 7.10 CJS m-array multinomial
+
+```{r}
+
+## Simulate covariate effects (and residual error)
+
+n.occasions <- 12
+n <- rep(30, n.occasions - 1)
+
+phi <- c(0.6, 0.5, 0.55, 0.6, 0.5, 0.4, 0.6, 0.5, 0.55, 0.6, 0.7)
+p  <- c(0.4, 0.65, 0.4, 0.45, 0.55, 0.68, 0.66, 0.28, 0.55, 0.45, 0.35)
+
+phi.matrix <- matrix(phi, ncol = n.occasions - 1, nrow = sum(n), byrow = T)
+
+p.matrix <- matrix(p, ncol = n.occasions - 1, nrow = sum(n), byrow = T)
+
+ch <- simulateHistoriesCJS(phi.matrix, p.matrix, n)
+
+marray <- function(CH) {
+  nind <- dim(CH)[1]
+  nocc <- dim(CH)[2]
+  m.array <- matrix(data = 0, ncol = nocc + 1, nrow = nocc)
+  
+  for (t in 1:nocc) {
+    m.array[t,1] <- sum(CH[,t])
+  }
+  for (i in 1:nind) {
+    pos <- which(CH[i, ] != 0)
+    g <- length(pos)
+    for (z in 1:(g - 1)) {
+      m.array[pos[z], pos[z + 1]] <- m.array[pos[z], pos[z + 1]] + 1
+    }
+  }
+  for (t in 1:nocc) {
+    m.array[t,nocc + 1] <- m.array[t,1] - sum(m.array[t, 2:nocc])
+  }
+  out <- m.array[1:(nocc-1), 2:(nocc+1)]
+  return(out)
+}
+
+
+```
+
+
+```{r}
+
+sink("model.7.10.2.jags")
+
+cat("
+
+model {
+    
+    # priors and constraints
+    
+    for (t in 1:(nOcc - 1)) {
+        phi[t] ~ dunif(0, 1)
+        p[t] ~ dunif(0, 1)
+    }
+    
+    # multinomial likelihood
+    
+    for (t in 1:(nOcc -1)) {
+      marr[t, 1:nOcc] ~ dmulti(pr[t,], r[t])
+    }
+      
+    # calculate birds released each year
+      
+    for (t in 1:(nOcc - 1)) {
+      r[t] <- sum(marr[t, ])
+    }
+    
+    # define cell probs for m-array
+    
+    # main diagonal
+    
+    for (t in 1:(nOcc - 1)) {
+      q[t] <- 1 - p[t]
+      pr[t, t] <- phi[t] * p[t]
+      
+      # above diagonal
+      
+      for (j in (t + 1):(nOcc - 1)) {
+        pr[t, j] <- prod(phi[t:j]) * prod(q[t:(j - 1)]) * p[j]
+      }
+      
+      # below main diagonal
+      
+      for (j in 1:(t - 1)) {
+        pr[t, j] <- 0
+      }
+    }
+    
+      # last column
+      
+      for (t in 1:(nOcc - 1)) {
+        pr[t, nOcc] <- 1 - sum(pr[t, 1:(nOcc - 1)])
+      }
+      
+      # assess model fit
+      
+      for (t in 1:(nOcc - 1)) {
+        for (j in 1:nOcc) {
+          expmarr[t, j] <- r[t] * pr[t, j]
+          E.org[t, j] <- pow((pow(marr[t, j], 0.5) - pow(expmarr[t, j], 0.5)), 2)
+        }
+      }
+      
+      # assess model fit
+      
+      for (t in 1:(nOcc - 1)) {
+        marr.new[t, 1:nOcc] ~ dmulti(pr[t, ], r[t])
+        for (j in 1:nOcc) {
+          E.new[t, j] <- pow((pow(marr.new[t, j], 0.5) - pow(expmarr[t, j], 0.5)), 2)
+        }
+      }
+      
+    
+    #fit <- sum(E.org[,])
+  #fit.new <- sum(E.new[,])
+  
+}
+", fill = TRUE)
+
+sink()
+
+
+```
+
+
+```{r}
+
+
+marr <- marray(ch)
+
+jags.data <- list(marr = marr, 
+                  nOcc = dim(marr)[2])
+
+
+### Initial values
+inits <- function(){list(phi = runif(dim(marr)[2] - 1, 0, 1),
+                         p = runif(dim(ch)[2] - 1, 0, 1))}
+
+
+### Parameters
+params <- c("phi", "p")
+
+
+### MCMC settings
+nc <- 3
+ni <- 10000
+nb <- 5000
+nt <- 5
+
+
+model.7.10.2 <- jagsUI::jags(data = jags.data, 
+                        inits = inits, 
+                        parameters.to.save = params,
+                        model.file = "model.7.10.2.jags", 
+                        n.chains = nc, 
+                        n.iter = ni, 
+                        n.burnin = nb, 
+                        n.thin = nt,
+                        parallel = TRUE)
+
+
+jagsUI::traceplot(model.7.10.2)
+
+
+print(model.7.8.1)
+
+
+plot(model.7.8.1)
+
+```
 
 
