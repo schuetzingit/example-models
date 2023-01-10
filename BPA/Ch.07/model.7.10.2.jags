@@ -1,0 +1,74 @@
+
+
+model {
+    
+    # priors and constraints
+    
+    for (t in 1:(nOcc - 1)) {
+        phi[t] ~ dunif(0, 1)
+        p[t] ~ dunif(0, 1)
+    }
+    
+    # multinomial likelihood
+    
+    for (t in 1:(nOcc -1)) {
+      marr[t, 1:nOcc] ~ dmulti(pr[t,], r[t])
+    }
+      
+    # calculate birds released each year
+      
+    for (t in 1:(nOcc - 1)) {
+      r[t] <- sum(marr[t, ])
+    }
+    
+    # define cell probs for m-array
+    
+    # main diagonal
+    
+    for (t in 1:(nOcc - 1)) {
+      q[t] <- 1 - p[t]
+      pr[t, t] <- phi[t] * p[t]
+      
+      # above diagonal
+      
+      for (j in (t + 1):(nOcc - 1)) {
+        pr[t, j] <- prod(phi[t:j]) * prod(q[t:(j - 1)]) * p[j]
+      }
+      
+      # below main diagonal
+      
+      for (j in 1:(t - 1)) {
+        pr[t, j] <- 0
+      }
+    }
+    
+      # last column
+      
+      for (t in 1:(nOcc - 1)) {
+        pr[t, nOcc] <- 1 - sum(pr[t, 1:(nOcc - 1)])
+      }
+      
+      # assess model fit
+      
+      for (t in 1:(nOcc - 1)) {
+        for (j in 1:nOcc) {
+          expmarr[t, j] <- r[t] * pr[t, j]
+          E.org[t, j] <- pow((pow(marr[t, j], 0.5) - pow(expmarr[t, j], 0.5)), 2)
+        }
+      }
+      
+      # assess model fit
+      
+      for (t in 1:(nOcc - 1)) {
+        marr.new[t, 1:nOcc] ~ dmulti(pr[t, ], r[t])
+        for (j in 1:nOcc) {
+          E.new[t, j] <- pow((pow(marr.new[t, j], 0.5) - pow(expmarr[t, j], 0.5)), 2)
+        }
+      }
+      
+    
+    #fit <- sum(E.org[,])
+  #fit.new <- sum(E.new[,])
+  
+}
+

@@ -1,0 +1,53 @@
+
+
+model {
+    
+    # priors and constraints
+    
+    for (i in 1:nInd) {
+      for (t in f[i]:(nOcc - 1)) {
+        logit(phi[i, t]) <- phi.mu + beta * x[i, t]
+        p[i, t] <- p.mu
+      }
+    }
+    
+    # for survival parameters
+    
+    phi.mu ~ dnorm(0, 0.01)
+    beta ~ dnorm(0, 0.01)
+    
+    for (i in 1:(nOcc - 1)) {
+      phi.age[i] <- ilogit(phi.mu + beta * i)
+    }
+      
+    # for recapture parameters
+    
+    p.mu ~ dunif(0, 1)
+    
+
+    # likelihood
+    
+    for (i in 1:nInd) {
+    
+      # define latent state at first capture
+      
+      z[i, f[i]] <- 1
+      
+      for (t in (f[i] + 1):nOcc) {
+      
+        # state process
+        
+        z[i, t] ~ dbern(mu1[i, t])
+        mu1[i, t] <- phi[i, t - 1] * z[i, t - 1]  
+        
+        # observation process
+        
+        y[i, t] ~ dbern(mu2[i, t])
+        mu2[i, t] <- p[i, t - 1] * z[i, t]      
+        
+      }
+  
+    }
+  
+}
+
