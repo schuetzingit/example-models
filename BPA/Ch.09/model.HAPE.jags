@@ -20,17 +20,19 @@ model {
 # Priors and constraints
 for (t in 1:(n.occasions-1)){
    s[t] ~ dunif(0, 1)
+   p[t] ~ dunif(0, 1)
+   r[t] ~ dunif(0, 1)
 }
 
-p[1] <- 1
-p[2] ~ dunif(0, 1)
-p[3] ~ dunif(0, 1)
-p[4] <- 1
+#p[1] <- 1
+#p[2] ~ dunif(0, 1)
+#p[3] ~ dunif(0, 1)
+#p[4] <- 1
 
-r[1] <- 0
-r[2] <- 0
-r[3] ~ dunif(0, 1)
-r[4] ~ dunif(0, 1)
+#r[1] <- 0
+#r[2] <- 0
+#r[3] ~ dunif(0, 1)
+#r[4] ~ dunif(0, 1)
 
 #mean.s ~ dunif(0, 1)     # Prior for mean survival
 #mean.r ~ dunif(0, 1)     # Prior for mean recovery
@@ -44,8 +46,8 @@ for (i in 1:nind) {
    
    for (t in f[i]:(n.occasions-1)) {
       ps[1,i,t,1] <- s[t]
-      ps[1,i,t,2] <- 1-s[t] * r[t]
-      ps[1,i,t,3] <- 1-r[t]
+      ps[1,i,t,2] <- 1-s[t] 
+      ps[1,i,t,3] <- 0
       ps[2,i,t,1] <- 0
       ps[2,i,t,2] <- 0
       ps[2,i,t,3] <- 1
@@ -58,8 +60,8 @@ for (i in 1:nind) {
       po[1,i,t,2] <- 0
       po[1,i,t,3] <- 1-p[t]
       po[2,i,t,1] <- 0
-      po[2,i,t,2] <- 0
-      po[2,i,t,3] <- 1
+      po[2,i,t,2] <- r[t]
+      po[2,i,t,3] <- 1-r[t]
       po[3,i,t,1] <- 0
       po[3,i,t,2] <- 0
       po[3,i,t,3] <- 1
