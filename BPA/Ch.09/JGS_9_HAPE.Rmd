@@ -1,0 +1,1228 @@
+---
+title: "JGS_9"
+author: "Justin Schuetz"
+date: "2022-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r}
+
+library(tidyverse)
+library(brms)
+library(rethinking)
+library(tidybayes)
+library(rjags)
+library(jagsUI)
+library(ggdist)
+
+```
+
+## Define function to simulate data
+
+```{r}
+
+simulateHistoriesHAPE <- function(PSI_STATES, PSI_OBS, N, unobservable = NA) { 
+  
+  # unobservable: the number of the unobservable state
+  
+  n.occasions <- dim(PSI_STATES)[4] + 1
+  CH <- CH_TRUE <- matrix(NA, ncol = n.occasions, nrow = sum(N))
+  
+  # define a vector with the occasion of marking
+  
+  mark.occ <- matrix(0, ncol = dim(PSI_STATES)[1], nrow = sum(N))
+  
+  g <- colSums(N)
+  
+  for (s in 1:dim(PSI_STATES)[1]) {
+    
+    if (g[s] == 0) next
+    mark.occ[(cumsum(g[1:s]) - g[s] + 1)[s]:cumsum(g[1:s])[s], s] <- rep(1:n.occasions, N[1:n.occasions, s])
+      
+  }
+  
+  for (i in 1:sum(N)) {
+    
+    for (s in 1:dim(PSI_STATES)[1]) {
+      
+      if (mark.occ[i, s] == 0) next
+      first <- mark.occ[i, s]
+      CH[i, first] <- s
+      CH_TRUE[i, first] <- s
+      
+    }
+    
+    for (t in (first+1):n.occasions) {
+      
+      if (first == n.occasions) next
+      
+      state <- which(rmultinom(1, 1, PSI_STATES[CH_TRUE[i, t-1], , i, t-1]) == 1)
+      CH_TRUE[i, t] <- state
+      
+      event <- which(rmultinom(1, 1, PSI_OBS[CH_TRUE[i, t], , i, t-1]) == 1)
+      CH[i, t] <- event
+      
+    }
+    
+  }
+  
+  CH[is.na(CH)] <- 0
+  CH[CH == dim(PSI_STATES)[1]] <- 0
+  CH[CH == unobservable] <- 0
+  id <- numeric(0)
+  
+  for (i in 1:dim(CH)[1]) {
+    z <- min(which(CH[i, ] != 0))
+    ifelse(z == dim(CH)[2], id <- c(id, i), id <- c(id))
+    
+  }
+  
+return(list(ch = CH[-id, ],
+            ch_true = CH_TRUE[-id,]))
+  
+}
+
+
+
+# Define function to simulate multistate capture-recapture data
+simul.ms <- function(PSI.STATE, PSI.OBS, marked, unobservable = NA){
+   # Unobservable: number of state that is unobservable
+   n.occasions <- dim(PSI.STATE)[4] + 1
+   CH <- CH.TRUE <- matrix(NA, ncol = n.occasions, nrow = sum(marked))
+   # Define a vector with the occasion of marking
+   mark.occ <- matrix(0, ncol = dim(PSI.STATE)[1], nrow = sum(marked))
+   g <- colSums(marked)
+   for (s in 1:dim(PSI.STATE)[1]){
+      if (g[s]==0) next  # To avoid error message if nothing to replace
+      mark.occ[(cumsum(g[1:s])-g[s]+1)[s]:cumsum(g[1:s])[s],s] <-
+      rep(1:n.occasions, marked[1:n.occasions,s])
+      } #s
+   for (i in 1:sum(marked)){
+      for (s in 1:dim(PSI.STATE)[1]){
+         if (mark.occ[i,s]==0) next
+         first <- mark.occ[i,s]
+         CH[i,first] <- s
+         CH.TRUE[i,first] <- s
+         } #s
+      for (t in (first+1):n.occasions){
+         # Multinomial trials for state transitions
+         if (first==n.occasions) next
+         state <- which(rmultinom(1, 1, PSI.STATE[CH.TRUE[i,t-1],,i,t-1])==1)
+         CH.TRUE[i,t] <- state
+         # Multinomial trials for observation process
+         event <- which(rmultinom(1, 1, PSI.OBS[CH.TRUE[i,t],,i,t-1])==1)
+         CH[i,t] <- event
+         } #t
+      } #i
+   # Replace the NA and the highest state number (dead) in the file by 0
+   CH[is.na(CH)] <- 0
+   CH[CH==dim(PSI.STATE)[1]] <- 0
+   CH[CH==unobservable] <- 0
+   id <- numeric(0)
+   for (i in 1:dim(CH)[1]){
+      z <- min(which(CH[i,]!=0))
+      ifelse(z==dim(CH)[2], id <- c(id,i), id <- c(id))
+      }
+   return(list(CH=CH[-id,], CH.TRUE=CH.TRUE[-id,]))
+   # CH: capture histories to be used
+   # CH.TRUE: capture histories with perfect observation
+   }
+```
+
+
+## Define function to identify fist capture occasion
+
+```{r}
+
+idFirstCaptureHAPE <- function(CH) {
+  
+  f <- apply(CH, MARGIN = 1, FUN = function(x) min(which(x != 0)))
+  
+  return(f)
+  
+}
+
+```
+
+## Define function to create known latent states z
+
+```{r}
+
+idKnownStatesHAPE <- function(CH, notseen){
+   
+  # notseen: label for ënot seení
+  
+  state <- CH
+  state[state == notseen] <- NA
+  
+  for (i in 1:dim(CH)[1]){
+    
+      m <- min(which(!is.na(state[i, ])))
+      state[i, m] <- NA
+      
+  }
+  
+  return(state)
+
+}
+
+```
+
+## Define function to create initial values for unknown z
+
+```{r}
+
+createZInitsHAPE <- function(ch, f){
+   
+  ch[ch == 3] <- NA # set state at unobserved indices to NA
+   
+  v2 <- which(ch == 2, arr.ind = T) # get array indices for dead recoveries
+   
+  ch[v2] <- 2 # set state at index of dead recovery to dead
+   
+   # if dead recovery isn't in the last column set all following states to dead absorbing
+   
+   for (i in 1:nrow(v2)){ 
+     
+      ifelse(v2[i,2] != ncol(ch), ch[v2[i,1], (v2[i,2]+1):ncol(ch)] <- 3, next) 
+     
+   }
+   
+   # fill in states between first and last live observation with alive in study area
+   
+   for (i in 1:nrow(ch)){
+      m <- max(which(ch[i,]==1))
+      ch[i,f[i]:m] <- 1
+   }
+   
+   # 
+   for (i in 1:nrow(v2)){
+      u1 <- min(which(ch[v2[i,1],]==1))
+      ch[v2[i], u1:(v2[i,2]-1)] <- 1
+   }
+   
+   
+   for (i in 1:nrow(ch)){
+      for (j in f[i]:ncol(ch)){
+         if(is.na(ch[i,j])==1) ch[i,j] <- 1
+         }
+      ch[i,f[i]] <- NA
+      }
+   return(ch)
+   }
+
+
+```
+
+## Simulate data for mark-recapture-recovery HAPE
+
+```{r}
+
+# Joint analysis of capture-recapture and mark-recovery data
+
+# Define mean survival, transitions, recapture, as well as number of occasions, states, observations and released individuals 
+s <- 0.8
+r <- 0.1
+p <- 0.5
+
+n.occasions <- 5  
+n.states <- 3
+n.obs <- 3
+n <- matrix(0, ncol = n.states, nrow = n.occasions)
+
+n[ , 1] <- rep(100, n.occasions)	# Releases in study area
+#n[ , 1] <- c(100, 0, 0, 0, 0)	# Releases in study area
+
+# Define matrices with survival, transition and recapture probabilities
+# These are 4-dimensional matrices, with 
+   # Dimension 1: state of departure
+   # Dimension 2: state of arrival
+   # Dimension 3: individual
+   # Dimension 4: time
+
+
+# 1. State process matrix
+released <- sum(n) * (n.occasions-1)
+
+PSI.STATE <- array(NA, dim=c(n.states, n.states, released, n.occasions-1))
+
+for (i in 1:released){
+   
+  for (t in 1:(n.occasions-1)) {
+      
+    PSI.STATE[,,i,t] <- matrix(c(
+      s,  1-s,  0,
+      0,   0,   1,
+      0,   0,   1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+   
+  } #i
+
+# 2.Observation process matrix
+
+PSI.OBS <- array(NA, dim=c(n.states, n.obs, released, n.occasions-1))
+
+for (i in 1:released) {
+  
+  for (t in 1:(n.occasions-1)) {
+      
+     PSI.OBS[,,i,t] <- matrix(c(
+      p,   0,   1-p,
+      0,   r,   1-r,
+      0,   0,   1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+  } #i
+
+```
+
+# HAPE model
+
+```{r}
+
+sink("model.HAPE.jags")
+cat("
+model {
+
+# -------------------------------------------------
+# Parameters:
+# s: true survival probability
+# r: recovery probability
+# p: detection probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 recently dead (and recovered)
+# 3 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+
+# Priors and constraints
+for (t in 1:(n.occasions-1)){
+   s[t] <- mean.s
+   p[t] <- mean.r 
+   r[t] <- mean.p 
+}
+
+mean.s ~ dunif(0, 1)     # Prior for mean survival
+mean.r ~ dunif(0, 1)     # Prior for mean recovery
+mean.p ~ dunif(0, 1)     # Prior for mean recapture
+
+# Define state-transition and observation matrices 	
+
+for (i in 1:nind) {
+
+   # Define probabilities of state S(t+1) given S(t)
+   
+   for (t in f[i]:(n.occasions-1)) {
+      ps[1,i,t,1] <- s[t]
+      ps[1,i,t,2] <- (1-s[t]) * r[t] 
+      ps[1,i,t,3] <- (1-s[t]) * (1-r[t])
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- 0
+      ps[2,i,t,3] <- 1
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+      po[1,i,t,1] <- p[t]
+      po[1,i,t,2] <- 0
+      po[1,i,t,3] <- 1-p[t]
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- 1
+      po[2,i,t,3] <- 0
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0
+      po[3,i,t,3] <- 1
+      
+      } #t
+      
+   } #i
+
+  # Likelihood 
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1,])
+      
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], i, t-1,])
+      
+    } #t
+   
+  } #i
+}
+", fill = TRUE)
+
+sink()
+
+```
+
+## HAPE data prep
+
+```{r}
+
+# Execute simulation function
+sim <- simulateHistoriesHAPE(PSI.STATE, PSI.OBS, n)
+
+ch <- sim$ch
+
+# Compute date of first capture
+f <- idFirstCaptureHAPE(ch)
+
+# Recode CH matrix: note, a 0 is not allowed!
+# 1 = alive and in study are, 2 = recovered dead, 3 = not seen or recovered
+rch <- ch  # Recoded CH
+rch[rch == 0] <- 3
+
+
+##### approach 2
+
+z_known_jgs <- idKnownStatesHAPE(rch, 3)
+
+x <- rch
+x[x==3] <- NA
+
+z_init_jgs <- createZInitsHAPE(rch, f)
+z_init_jgs[!is.na(x)] <- NA
+
+
+```
+
+## HAPE analysis
+
+```{r}
+
+# Bundle data
+jags.data <- list(y = rch, 
+                  f = f, 
+                  n.occasions = dim(rch)[2], 
+                  nind = dim(rch)[1],
+                  z = z_known_jgs)
+
+
+inits <- function(){list(mean.s = runif(1, 0, 1), 
+                         mean.r = runif(1, 0, 1), 
+                         mean.p = runif(1, 0, 1),
+                         z = z_init_jgs)}  
+
+
+# Parameters monitored
+parameters <- c("mean.s", "mean.r", "mean.p")
+
+
+# MCMC settings
+ni <- 15000
+nt <- 3
+nb <- 9000
+nc <- 3
+
+
+# Call JAGS from R (BRT 80 min)
+lifedead <- jagsUI::jags(jags.data, 
+                         inits, 
+                         parameters, "model.HAPE.jags", 
+                         n.chains = nc, 
+                         n.thin = nt, 
+                         n.iter = ni, 
+                         n.burnin = nb,
+                         parallel = T)
+
+
+print(lifedead, digit = 3)
+
+
+jagsUI::traceplot(lifedead)
+
+```
+
+## Simulate data for mark-recapture-recovery HAPE
+
+```{r}
+
+# Joint analysis of capture-recapture and mark-recovery data
+
+# Define mean survival, transitions, recapture, as well as number of occasions, states, observations and released individuals 
+
+s <- c(0.8, 0.6, 0.6, 0.7)
+r <- c(0, 0, 0.2, 0.1)
+p <- c(0.9, 0.8, 0.8, 0.9)
+
+n.occasions <- 5  
+n.states <- 3
+n.obs <- 3
+n <- matrix(0, ncol = n.states, nrow = n.occasions)
+
+n[ , 1] <- rep(1000, n.occasions)	# Releases in study area
+#n[ , 1] <- c(100, 0, 0, 0, 0)	# Releases in study area
+
+# Define matrices with survival, transition and recapture probabilities
+# These are 4-dimensional matrices, with 
+   # Dimension 1: state of departure
+   # Dimension 2: state of arrival
+   # Dimension 3: individual
+   # Dimension 4: time
+
+
+# 1. State process matrix
+released <- sum(n) * (n.occasions-1)
+
+PSI.STATE <- array(NA, dim=c(n.states, n.states, released, n.occasions-1))
+
+for (i in 1:released){
+   
+  for (t in 1:(n.occasions-1)) {
+      
+    PSI.STATE[,,i,t] <- matrix(c(
+      s[t],  (1-s[t])*r[t],  (1-s[t])*(1-r[t]),
+      0,     0,       1,
+      0,     0,       1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+   
+  } #i
+
+# 2.Observation process matrix
+
+PSI.OBS <- array(NA, dim=c(n.states, n.obs, released, n.occasions-1))
+
+for (i in 1:released) {
+  
+  for (t in 1:(n.occasions-1)) {
+      
+     PSI.OBS[,,i,t] <- matrix(c(
+      p[t],   0,      1-p[t],
+      0,      1,      0,
+      0,      0,      1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+  } #i
+
+```
+
+# HAPE model
+
+```{r}
+
+sink("model.HAPE.t.jags")
+cat("
+model {
+
+# -------------------------------------------------
+# Parameters:
+# s: true survival probability
+# r: recovery probability
+# p: detection probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 recently dead (and recovered)
+# 3 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+
+# Priors and constraints
+for (t in 1:(n.occasions-1)){
+   s[t] ~ dbeta(1, 1)
+   p[t] ~ dbeta(1, 1)
+   r[t] ~ dunif(0, 0.3)
+}
+
+# Define state-transition and observation matrices 	
+
+
+   # Define probabilities of state S(t+1) given S(t)
+   
+   for (t in 1:(n.occasions-1)) {
+      ps[1,t,1] <- s[t]
+      ps[1,t,2] <- (1-s[t]) * r[t] 
+      ps[1,t,3] <- (1-s[t]) * (1-r[t])
+      ps[2,t,1] <- 0
+      ps[2,t,2] <- 0
+      ps[2,t,3] <- 1
+      ps[3,t,1] <- 0
+      ps[3,t,2] <- 0
+      ps[3,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+      po[1,t,1] <- p[t]
+      po[1,t,2] <- 0
+      po[1,t,3] <- 1-p[t]
+      po[2,t,1] <- 0
+      po[2,t,2] <- 1
+      po[2,t,3] <- 0
+      po[3,t,1] <- 0
+      po[3,t,2] <- 0
+      po[3,t,3] <- 1
+      
+      } #t
+      
+  
+
+  # Likelihood 
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], t-1,])
+      
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], t-1,])
+      
+    } #t
+   
+  } #i
+}
+", fill = TRUE)
+
+sink()
+
+```
+
+# HAPE model
+
+```{r}
+
+sink("model.HAPE.t.alt.jags")
+cat("
+model {
+
+# -------------------------------------------------
+# Parameters:
+# s: true survival probability
+# r: recovery probability
+# p: detection probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 recently dead (and recovered)
+# 3 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+
+# Priors and constraints
+
+for (t in 1:(n.occasions-1)){
+   s[t] ~ dunif(0, 1)
+   p[t] ~ dunif(0, 1)
+}
+
+for (t in 1:2){
+   r[t] ~ dunif(0, 1)
+}
+
+
+
+# Define state-transition and observation matrices 	
+
+   # Define probabilities of state S(t+1) given S(t)
+   
+   for (t in 1:(n.occasions-1)) {
+      
+      ps[1,t,1] <- s[t]
+      ps[2,t,1] <- 0
+      ps[2,t,2] <- 0
+      ps[2,t,3] <- 1
+      ps[3,t,1] <- 0
+      ps[3,t,2] <- 0
+      ps[3,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+
+      po[1,t,1] <- p[t]
+      po[1,t,2] <- 0
+      po[1,t,3] <- 1-p[t] 
+      po[2,t,1] <- 0
+      po[2,t,2] <- 1
+      po[2,t,3] <- 0
+      po[3,t,1] <- 0
+      po[3,t,2] <- 0
+      po[3,t,3] <- 1
+      
+    } #t
+      
+    rfix <- 0
+    
+    for (t in 1:2) {
+      
+      ps[1,t,2] <- 1-s[t] * rfix
+      ps[1,t,3] <- 0
+      
+    }  
+     
+    for (t in 3:4) {
+      
+      ps[1,t,2] <- (1-s[t]) * r[t-2]
+      ps[1,t,3] <- (1-s[t]) * (1-r[t-2])
+      
+    } 
+  
+  
+  
+  # Likelihood 
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], t-1,])
+      
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], t-1,])
+      
+    } #t
+   
+  } #i
+}
+", fill = TRUE)
+
+sink()
+
+```
+
+## HAPE data prep
+
+```{r}
+
+# Execute simulation function
+sim <- simulateHistoriesHAPE(PSI.STATE, PSI.OBS, n, unobservable = 3)
+sim <- simul.ms(PSI.STATE, PSI.OBS, n, unobservable = 3)
+
+ch <- sim$CH[1:1000,]
+
+# Compute date of first capture
+f <- idFirstCaptureHAPE(ch)
+
+# Recode CH matrix: note, a 0 is not allowed!
+# 1 = alive and in study are, 2 = recovered dead, 3 = not seen or recovered
+rch <- ch  # Recoded CH
+rch[rch == 0] <- 3
+
+
+##### approach 2
+
+z_known_jgs <- idKnownStatesHAPE(rch, 3)
+
+x <- rch
+x[x==3] <- NA
+
+z_init_jgs <- createZInitsHAPE(rch, f)
+z_init_jgs[!is.na(x)] <- NA
+
+
+```
+
+## HAPE analysis
+
+```{r}
+
+# Bundle data
+jags.data <- list(y = rch, 
+                  f = f, 
+                  n.occasions = dim(rch)[2], 
+                  nind = dim(rch)[1],
+                  z = z_known_jgs)
+
+
+inits <- function(){list(s = rbeta(4, 1, 1), 
+                         r = runif(4, 0, 0.3), 
+                         p = rbeta(4, 1, 1),
+                         z = z_init_jgs)}  
+
+
+# Parameters monitored
+parameters <- c("s", "r", "p")
+
+
+# MCMC settings
+ni <- 100000
+nt <- 10
+nb <- 80000
+nc <- 3
+
+
+# Call JAGS from R (BRT 80 min)
+lifedead.t <- jagsUI::jags(jags.data, 
+                         inits, 
+                         parameters, "model.HAPE.t.jags", 
+                         n.chains = nc, 
+                         n.thin = nt, 
+                         n.iter = ni, 
+                         n.burnin = nb,
+                         parallel = T)
+
+
+print(lifedead.t, digit = 3)
+
+
+jagsUI::traceplot(lifedead.t)
+
+```
+
+## Simulate data for mark-recapture-recovery HAPE
+
+```{r}
+
+# Joint analysis of capture-recapture and mark-recovery data
+
+# Define mean survival, transitions, recapture, as well as number of occasions, states, observations and released individuals 
+
+s <- c(0.8, 0.6, 0.6, 0.7)
+r <- c(0.1, 0.1, 0.2, 0.1)
+p <- c(1, 0.8, 0.8, 1)
+
+n.occasions <- 5  
+n.states <- 3
+n.obs <- 3
+n <- matrix(0, ncol = n.states, nrow = n.occasions)
+
+n[ , 1] <- rep(100, n.occasions)	# Releases in study area
+#n[ , 1] <- c(100, 0, 0, 0, 0)	# Releases in study area
+
+# Define matrices with survival, transition and recapture probabilities
+# These are 4-dimensional matrices, with 
+   # Dimension 1: state of departure
+   # Dimension 2: state of arrival
+   # Dimension 3: individual
+   # Dimension 4: time
+
+
+# 1. State process matrix
+released <- sum(n) * (n.occasions-1)
+
+PSI.STATE <- array(NA, dim=c(n.states, n.states, released, n.occasions-1))
+
+for (i in 1:released){
+   
+  for (t in 1:(n.occasions-1)) {
+      
+    PSI.STATE[,,i,t] <- matrix(c(
+      s[t],  1-s[t],  0,
+      0,     0,       1,
+      0,     0,       1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+   
+  } #i
+
+# 2.Observation process matrix
+
+PSI.OBS <- array(NA, dim=c(n.states, n.obs, released, n.occasions-1))
+
+for (i in 1:released) {
+  
+  for (t in 1:(n.occasions-1)) {
+      
+     PSI.OBS[,,i,t] <- matrix(c(
+      p[t],   0,      1-p[t],
+      0,      r[t],   1-r[t],
+      0,      0,      1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+  } #i
+
+```
+
+# HAPE model
+
+```{r}
+
+sink("model.HAPE.t.fixed.jags")
+cat("
+model {
+
+# -------------------------------------------------
+# Parameters:
+# s: true survival probability
+# r: recovery probability
+# p: detection probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 recently dead (and recovered)
+# 3 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+
+# Priors and constraints
+
+p <- c(1, 0.5, 0.5, 1)
+
+for (t in 1:(n.occasions-1)){
+   s[t] ~ dunif(0, 1)
+   r[t] ~ dunif(0, 1)
+   #p[t] ~ dunif(pv[t], 1)
+}
+
+# Define state-transition and observation matrices 	
+
+for (i in 1:nind) {
+
+   # Define probabilities of state S(t+1) given S(t)
+   
+   for (t in f[i]:(n.occasions-1)) {
+      ps[1,i,t,1] <- s[t]
+      ps[1,i,t,2] <- (1-s[t]) * r[t] 
+      ps[1,i,t,3] <- (1-s[t]) * (1-r[t])
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- 0
+      ps[2,i,t,3] <- 1
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+      po[1,i,t,1] <- p[t]
+      po[1,i,t,2] <- 0
+      po[1,i,t,3] <- 1-p[t]
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- 1
+      po[2,i,t,3] <- 0
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0
+      po[3,i,t,3] <- 1
+      
+      } #t
+      
+   } #i
+
+  # Likelihood 
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1,])
+      
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], i, t-1,])
+      
+    } #t
+   
+  } #i
+}
+", fill = TRUE)
+
+sink()
+
+```
+
+## HAPE data prep
+
+```{r}
+
+# Execute simulation function
+sim <- simulateHistoriesHAPE(PSI.STATE, PSI.OBS, n)
+
+ch <- sim$ch
+
+# Compute date of first capture
+f <- idFirstCaptureHAPE(ch)
+
+# Recode CH matrix: note, a 0 is not allowed!
+# 1 = alive and in study are, 2 = recovered dead, 3 = not seen or recovered
+rch <- ch  # Recoded CH
+rch[rch == 0] <- 3
+
+
+##### approach 2
+
+z_known_jgs <- idKnownStatesHAPE(rch, 3)
+
+x <- rch
+x[x==3] <- NA
+
+z_init_jgs <- createZInitsHAPE(rch, f)
+z_init_jgs[!is.na(x)] <- NA
+
+
+```
+
+## HAPE analysis
+
+```{r}
+
+# Bundle data
+jags.data <- list(y = rch, 
+                  f = f, 
+                  n.occasions = dim(rch)[2], 
+                  nind = dim(rch)[1],
+                  z = z_known_jgs)
+
+
+inits <- function(){list(s = runif(4, 0, 1), 
+                         r = runif(4, 0, 1), 
+                         p = runif(4, 0, 1),
+                         z = z_init_jgs)}  
+
+
+# Parameters monitored
+parameters <- c("s", "r", "p")
+
+
+# MCMC settings
+ni <- 25000
+nt <- 15
+nb <- 10000
+nc <- 3
+
+
+# Call JAGS from R (BRT 80 min)
+lifedead.t.fix <- jagsUI::jags(jags.data, 
+                         inits, 
+                         parameters, "model.HAPE.t.fixed.jags", 
+                         n.chains = nc, 
+                         n.thin = nt, 
+                         n.iter = ni, 
+                         n.burnin = nb,
+                         parallel = T)
+
+
+print(lifedead.t, digit = 3)
+
+
+jagsUI::traceplot(lifedead.t)
+
+```
+
+## try nimble
+
+We can just create, compile, and use the model. 
+
+```{r}
+
+library(nimble)
+
+testcode <- nimbleCode({
+  
+
+# -------------------------------------------------
+# Parameters:
+# s: true survival probability
+# r: recovery probability
+# p: detection probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 recently dead (and recovered)
+# 3 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+
+# Priors and constraints
+for (t in 1:(n.occasions-1)){
+   s[t] ~ dunif(0, 1)
+   p[t] ~ dunif(0, 1)
+   r[t] ~ dunif(0, 1)
+}
+
+
+# Define state-transition and observation matrices 	
+
+for (i in 1:nind) {
+
+   # Define probabilities of state S(t+1) given S(t)
+   
+   for (t in f[i]:(n.occasions-1)) {
+      ps[1,i,t,1] <- s[t]
+      ps[1,i,t,2] <- (1-s[t]) * r[t]
+      ps[1,i,t,3] <- (1-s[t]) * (1-r[t])
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- 0
+      ps[2,i,t,3] <- 1
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+      po[1,i,t,1] <- p[t]
+      po[1,i,t,2] <- 0
+      po[1,i,t,3] <- 1-p[t]
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- 1
+      po[2,i,t,3] <- 0
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0 
+      po[3,i,t,3] <- 1
+      
+      } #t
+      
+   } #i
+
+  # Likelihood 
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1, 1:3])
+      
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], i, t-1, 1:3])
+      
+    } #t
+   
+  } #i
+})
+  
+
+```
+
+```{r}
+
+testcode2 <- nimbleCode({
+
+# -------------------------------------------------
+# Parameters:
+# s: true survival probability
+# r: recovery probability
+# p: detection probability
+# -------------------------------------------------
+# States (S):
+# 1 alive in study area
+# 2 recently dead (and recovered)
+# 3 recently dead, but not recovered, or dead (absorbing)
+# Observations (O):
+# 1 seen alive
+# 2 recovered dead
+# 3 neither seen nor recovered
+# -------------------------------------------------
+
+# Priors and constraints
+for (t in 1:(n.occasions-1)){
+   s[t] ~ dunif(0, 1)
+   p[t] ~ dunif(0, 1)
+   r[t] ~ dunif(0, 1)
+}
+
+
+# Define state-transition and observation matrices 	
+
+for (i in 1:nind) {
+
+   # Define probabilities of state S(t+1) given S(t)
+   
+   for (t in f[i]:(n.occasions-1)) {
+      ps[1,i,t,1] <- s[t]
+      ps[1,i,t,2] <- (1-s[t])
+      ps[1,i,t,3] <- 0
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- 0
+      ps[2,i,t,3] <- 1
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+      po[1,i,t,1] <- p[t]
+      po[1,i,t,2] <- 0
+      po[1,i,t,3] <- 1-p[t]
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- r[t]
+      po[2,i,t,3] <- 1-r[t]
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0 
+      po[3,i,t,3] <- 1
+      
+      } #t
+      
+   } #i
+
+  # Likelihood 
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1, 1:3])
+      
+      # Observation process: draw O(t) given S(t)
+      y[i,t] ~ dcat(po[z[i,t], i, t-1, 1:3])
+      
+    } #t
+   
+  } #i
+})
+```
+
+
+```{r}
+
+
+testdata <- list(y = rch, 
+                  f = f, 
+                  n.occasions = dim(rch)[2], 
+                  nind = dim(rch)[1],
+                  z = z_known_jgs)
+
+
+testinits <- function(){list(s = runif(4, 0, 1), 
+                         r = runif(4, 0, 1), 
+                         p = runif(4, 0, 1),
+                         z = z_init_jgs)}  
+
+
+testmodel <- nimbleMCMC(code = testcode2,
+                        constants = testdata,
+                        inits = testinits(),
+                        nchains = 2, 
+                        niter = 20000,
+                        monitors = c('s','p','r'),
+                        summary = TRUE)
+
+
+testmodel$summary
+
+
+
+```

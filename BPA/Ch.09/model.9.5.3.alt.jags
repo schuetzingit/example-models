@@ -22,7 +22,7 @@ model {
 # Priors and constraints
 for (t in 1:(n.occasions-1)){
    s[t] <- mean.s
-   F[t] <- mean.f
+   F[t] <- 1
    r[t] <- mean.r
    p[t] <- mean.p
    }
