@@ -1399,7 +1399,7 @@ testmodel <- nimbleMCMC(code = testcode3,
                         constants = testdata,
                         inits = testinits,
                         nchains = 2, 
-                        niter = 20000,
+                        niter = 50000,
                         monitors = c('s','p','r', "success"),
                         summary = TRUE)
 
@@ -1409,7 +1409,7 @@ testmodel$summary
 
 MCMCtrace(object = testmodel$samples,
           pdf = F,
-          params = "p",
+          params = "success",
           ind = T)
 
 
