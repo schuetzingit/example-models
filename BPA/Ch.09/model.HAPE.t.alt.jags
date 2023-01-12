@@ -20,13 +20,15 @@ model {
 # Priors and constraints
 
 for (t in 1:(n.occasions-1)){
-   s[t] ~ dunif(0, 1)
-   p[t] ~ dunif(0, 1)
+   s[t] ~ dbeta(1, 1)
+   p[t] ~ dbeta(1, 1)
 }
 
 for (t in 1:2){
-   r[t] ~ dunif(0, 1)
+   r[t] ~ dbeta(1, 1)
 }
+
+
 
 # Define state-transition and observation matrices 	
 
@@ -61,7 +63,7 @@ for (t in 1:2){
     for (t in 1:2) {
       
       ps[1,t,2] <- 1-s[t] * rfix
-      ps[1,t,3] <- 0
+      ps[1,t,3] <- 1-s[t] * (1-rfix)
       
     }  
      
