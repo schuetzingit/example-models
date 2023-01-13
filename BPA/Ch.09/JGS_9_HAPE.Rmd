@@ -20,6 +20,7 @@ library(tidybayes)
 library(rjags)
 library(jagsUI)
 library(ggdist)
+library(nimble)
 library(MCMCvis)
 
 ```
@@ -96,7 +97,6 @@ simulateHistoriesHAPE <- function(PSI_STATES, PSI_OBS, N, NOTSEEABLE = NA) {
 
 
 ```
-
 
 ## Define function to identify fist capture occasion
 
@@ -1079,15 +1079,109 @@ jagsUI::traceplot(lifedead.t)
 
 ```
 
-## try nimble
-
-We can just create, compile, and use the model. 
+## NIMBLE: Simulate data for mark-recapture-recovery HAPE
 
 ```{r}
 
-library(nimble)
+# Joint analysis of capture-recapture and mark-recovery data
 
-testcode <- nimbleCode({
+# Define mean survival, transitions, recapture, as well as number of occasions, states, observations and released individuals 
+
+s <- c(0.95, 0.85, 0.75, 0.85)
+r <- c(0, 0, 0.2, 0.2)
+p <- c(1, 0.8, 0.8, 1)
+
+n.occasions <- 5  
+n.states <- 3
+n.obs <- 3
+n <- matrix(0, ncol = n.states, nrow = n.occasions)
+
+n[ , 1] <- rep(500, n.occasions)	# Releases in study area
+#n[ , 1] <- c(100, 0, 0, 0, 0)	# Releases in study area
+
+# Define matrices with survival, transition and recapture probabilities
+# These are 4-dimensional matrices, with 
+   # Dimension 1: state of departure
+   # Dimension 2: state of arrival
+   # Dimension 3: individual
+   # Dimension 4: time
+
+
+# 1. State process matrix
+released <- sum(n) * (n.occasions-1)
+
+PSI.STATE <- array(NA, dim=c(n.states, n.states, released, n.occasions-1))
+
+for (i in 1:released){
+   
+  for (t in 1:(n.occasions-1)) {
+      
+    PSI.STATE[,,i,t] <- matrix(c(
+      s[t],  (1-s[t])*r[t],  (1-s[t])*(1-r[t]),
+      0,     0,       1,
+      0,     0,       1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+   
+  } #i
+
+# 2.Observation process matrix
+
+PSI.OBS <- array(NA, dim=c(n.states, n.obs, released, n.occasions-1))
+
+for (i in 1:released) {
+  
+  for (t in 1:(n.occasions-1)) {
+      
+     PSI.OBS[,,i,t] <- matrix(c(
+      p[t],   0,      1-p[t],
+      0,      1,      0,
+      0,      0,      1), 
+      nrow = n.states, byrow = TRUE)
+      
+    } #t
+  
+  } #i
+
+```
+
+## NIMBLE: HAPE data prep
+
+```{r}
+
+# Execute simulation function
+sim <- simulateHistoriesHAPE(PSI.STATE, PSI.OBS, n, NOTSEEABLE = 3)
+
+ch <- sim$ch
+ch <- ch[1:500, ]
+
+# Compute date of first capture
+f <- idFirstCaptureHAPE(ch)
+
+# Recode CH matrix: note, a 0 is not allowed!
+# 1 = alive and in study are, 2 = recovered dead, 3 = not seen or recovered
+rch <- ch  # Recoded CH
+rch[rch == 0] <- 3
+
+
+
+z_known_jgs <- idKnownStatesHAPE(rch, 3)
+
+x <- rch
+x[x==3] <- NA
+
+z_init_jgs <- createZInitsHAPE(rch, f)
+z_init_jgs[!is.na(x)] <- NA
+
+
+```
+
+## NIMBLE: testcode1
+
+```{r}
+
+testcode1 <- nimbleCode({
   
 
 # -------------------------------------------------
@@ -1164,6 +1258,8 @@ for (t in 1:(n.occasions-1)){
 
 ```
 
+## NIMBLE: run testcode 1
+
 ```{r}
 
 
@@ -1198,7 +1294,7 @@ MCMCtrace(object = testmodel$samples,
 
 ```
 
-## code 3
+## NIMBLE: testcode2
 
 ```{r}
 
@@ -1284,6 +1380,8 @@ for (t in 1:2){
 
 ```
 
+## NIMBLE: testcode3
+
 ```{r}
 
 testcode3 <- nimbleCode({
@@ -1298,8 +1396,6 @@ for (t in 1:2){
   p[t] ~ dbeta(1, 1)
   r[t] ~ dbeta(1, 3)
 }
-
-
 
 # Define state-transition and observation matrices 	
 
@@ -1380,31 +1476,36 @@ for (t in 1:2){
 
 ```
 
+## NIMBLE: run testcode3
+
 ```{r}
 
-testdata <- list(y = rch, 
-                  f = f, 
-                  n.occasions = dim(rch)[2], 
-                  nind = dim(rch)[1],
-                  z = z_known_jgs)
+testdata <- list(y = rch,
+                 f = f,
+                 n.occasions = dim(rch)[2],
+                 nind = dim(rch)[1],
+                 z = z_known_jgs)
 
 
-testinits <- function(){list(s = rbeta(4, 1, 1), 
-                         r = rbeta(2, 1, 3), 
-                         p = rbeta(2, 1, 1),
-                         z = z_init_jgs)}  
+testinits <- function() {list(s = rbeta(4, 1, 1),
+                              r = rbeta(2, 1, 3), 
+                              p = rbeta(2, 1, 1),
+                              z = z_init_jgs)}  
 
 
 testmodel <- nimbleMCMC(code = testcode3,
                         constants = testdata,
                         inits = testinits,
-                        nchains = 2, 
+                        nchains = 3, 
                         niter = 50000,
-                        monitors = c('s','p','r', "success"),
+                        monitors = c("s", "p", "r", "success"),
                         summary = TRUE)
 
 
-testmodel$summary
+MCMCsummary(testmodel$samples, 
+            #HPD = TRUE, 
+            #hpd_prob = 0.8,
+            round = 3)
 
 
 MCMCtrace(object = testmodel$samples,
@@ -1413,5 +1514,132 @@ MCMCtrace(object = testmodel$samples,
           ind = T)
 
 
+```
+
+## NIMBLE: testcode5 fixed survival effects
+
+```{r}
+
+testcode5 <- nimbleCode({
+  
+# Priors and constraints
+
+for (t in 1:(n.occasions-1)) {
+  
+  logit(s[t]) <- s.alpha[t] + s.beta.yr[t] * year[i] 
+  
+  }
+  
+  s.alpha ~ dnorm(0, 3)
+  s.beta.yr ~ dnorm(0, 2)
+
+  
+for (t in 1:2){
+  p[t] ~ dbeta(1, 1)
+  r[t] ~ dbeta(1, 3)
+}
+  
+  
+  
+# Define state-transition and observation matrices 	
+
+   for (t in 1:(n.occasions-1)) {
+      
+      # Define probabilities of state S(t+1) given S(t)
+
+      ps[1,t,1] <- s[t]
+      ps[2,t,1] <- 0
+      ps[2,t,2] <- 0
+      ps[2,t,3] <- 1
+      ps[3,t,1] <- 0
+      ps[3,t,2] <- 0
+      ps[3,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+
+      po[1,t,2] <- 0
+      po[2,t,1] <- 0
+      po[2,t,2] <- 1
+      po[2,t,3] <- 0
+      po[3,t,1] <- 0
+      po[3,t,2] <- 0
+      po[3,t,3] <- 1
+      
+      } 
+      
+    # fix recovery parameters
+  
+    rfix <- 0
+    
+    for (t in 1:2) {
+      
+      ps[1,t,2] <- 1-s[t] * rfix
+      ps[1,t,3] <- 1-s[t] * (1-rfix)
+      
+      }  
+     
+    for (t in 3:4) {
+      
+      ps[1,t,2] <- (1-s[t]) * r[t-2]
+      ps[1,t,3] <- (1-s[t]) * (1-r[t-2])
+      
+      } 
+  
+    # fix detection parameters
+    
+    for (t in 2:3) {
+      
+      po[1,t,1] <- p[t-1]
+      po[1,t,3] <- 1-p[t-1]
+      
+      }
+    
+    po[1,1,1] <- 1
+    po[1,4,1] <- 1
+    po[1,1,3] <- 0 
+    po[1,4,3] <- 0 
+  
+  # Likelihood 
+    
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+    
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+     
+      z[i,t] ~ dcat(ps[z[i,t-1], t-1, 1:3])
+      
+      # Observation process: draw O(t) given S(t)
+     
+      y[i,t] ~ dcat(po[z[i,t], t-1, 1:3])
+      
+      } #t
+   
+    } #i
+    
+  success <- s[1] * s[2] * s[3] * s[4]
+    
+})
+
+```
+
+```{r}
+
+
+  for (t in 1:2) {
+  
+  logit(p[t]) <- p.alpha[t] #+ p.beta[t] * survey[i]  
+  logit(r[t]) <- r.alpha[t] #+ r.beta[t] * survey[i] 
+  
+}
+
+  p.alpha ~ dnorm(0, 3)
+  r.alpha ~ dnorm(0, 3)
+
+  
 ```
 
