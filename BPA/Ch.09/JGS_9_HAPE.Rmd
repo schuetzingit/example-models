@@ -1088,7 +1088,7 @@ jagsUI::traceplot(lifedead.t)
 # Define mean survival, transitions, recapture, as well as number of occasions, states, observations and released individuals 
 
 s <- c(0.95, 0.85, 0.75, 0.85)
-r <- c(0, 0, 0.2, 0.2)
+r <- c(0, 0, 0.4, 0.2)
 p <- c(1, 0.8, 0.8, 1)
 
 n.occasions <- 5  
@@ -1496,7 +1496,7 @@ testinits <- function() {list(s = rbeta(4, 1, 1),
 testmodel <- nimbleMCMC(code = testcode3,
                         constants = testdata,
                         inits = testinits,
-                        nchains = 3, 
+                        nchains = 2, 
                         niter = 50000,
                         monitors = c("s", "p", "r", "success"),
                         summary = TRUE)
@@ -1516,54 +1516,63 @@ MCMCtrace(object = testmodel$samples,
 
 ```
 
-## NIMBLE: testcode5 fixed survival effects
+## NIMBLE: testcode4 group effects on survival
 
 ```{r}
 
-testcode5 <- nimbleCode({
+testcode4 <- nimbleCode({
   
 # Priors and constraints
 
-for (t in 1:(n.occasions-1)) {
-  
-  logit(s[t]) <- s.alpha[t] + s.beta.yr[t] * year[i] 
-  
-  }
-  
-  s.alpha ~ dnorm(0, 3)
-  s.beta.yr ~ dnorm(0, 2)
 
+# Survival priors by stage and group membership
   
-for (t in 1:2){
+for (g in 1:ngroup) { 
+  
+  for (t in 1:(n.occasions - 1)) {
+  
+    s[g,t] ~ dbeta(1, 1)
+  
+    }
+
+}  
+  
+
+# Detection and recovery priors for two intervals 
+# other intervals have constant values, defined below
+  
+for (t in 1:2) {
+  
   p[t] ~ dbeta(1, 1)
   r[t] ~ dbeta(1, 3)
+  
 }
-  
-  
-  
-# Define state-transition and observation matrices 	
 
+# Define state-transition and observation matrices 
+  
+for (i in 1:nind) {
+  
    for (t in 1:(n.occasions-1)) {
       
       # Define probabilities of state S(t+1) given S(t)
 
-      ps[1,t,1] <- s[t]
-      ps[2,t,1] <- 0
-      ps[2,t,2] <- 0
-      ps[2,t,3] <- 1
-      ps[3,t,1] <- 0
-      ps[3,t,2] <- 0
-      ps[3,t,3] <- 1
+      ps[1,i,t,1] <- s[group[i],t]
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- 0
+      ps[2,i,t,3] <- 1
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- 1
 
       # Define probabilities of O(t) given S(t)
 
-      po[1,t,2] <- 0
-      po[2,t,1] <- 0
-      po[2,t,2] <- 1
-      po[2,t,3] <- 0
-      po[3,t,1] <- 0
-      po[3,t,2] <- 0
-      po[3,t,3] <- 1
+      po[1,i,t,2] <- 0
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- 1
+      po[2,i,t,3] <- 0
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0
+      po[3,i,t,3] <- 1
       
       } 
       
@@ -1573,15 +1582,15 @@ for (t in 1:2){
     
     for (t in 1:2) {
       
-      ps[1,t,2] <- 1-s[t] * rfix
-      ps[1,t,3] <- 1-s[t] * (1-rfix)
+      ps[1,i,t,2] <- 1-s[group[i],t] * rfix
+      ps[1,i,t,3] <- 1-s[group[i],t] * (1-rfix)
       
       }  
      
     for (t in 3:4) {
       
-      ps[1,t,2] <- (1-s[t]) * r[t-2]
-      ps[1,t,3] <- (1-s[t]) * (1-r[t-2])
+      ps[1,i,t,2] <- (1-s[group[i],t]) * r[t-2]
+      ps[1,i,t,3] <- (1-s[group[i],t]) * (1-r[t-2])
       
       } 
   
@@ -1589,15 +1598,17 @@ for (t in 1:2){
     
     for (t in 2:3) {
       
-      po[1,t,1] <- p[t-1]
-      po[1,t,3] <- 1-p[t-1]
+      po[1,i,t,1] <- p[t-1]
+      po[1,i,t,3] <- 1-p[t-1]
       
       }
     
-    po[1,1,1] <- 1
-    po[1,4,1] <- 1
-    po[1,1,3] <- 0 
-    po[1,4,3] <- 0 
+    po[1,i,1,1] <- 1
+    po[1,i,4,1] <- 1
+    po[1,i,1,3] <- 0 
+    po[1,i,4,3] <- 0 
+
+}
   
   # Likelihood 
     
@@ -1611,21 +1622,245 @@ for (t in 1:2){
    
       # State process: draw S(t) given S(t-1)
      
-      z[i,t] ~ dcat(ps[z[i,t-1], t-1, 1:3])
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1, 1:3])
       
       # Observation process: draw O(t) given S(t)
      
-      y[i,t] ~ dcat(po[z[i,t], t-1, 1:3])
+      y[i,t] ~ dcat(po[z[i,t], i, t-1, 1:3])
       
       } #t
    
     } #i
     
-  success <- s[1] * s[2] * s[3] * s[4]
+  
+  for (g in 1:ngroup) {
     
+    success[g] <- s[g,1] * s[g,2] * s[g,3] * s[g,4]
+    
+  }
+  
 })
 
 ```
+
+## NIMBLE: run testcode4
+
+```{r}
+
+testdata <- list(y = rch,
+                 z = z_known_jgs)
+
+
+testconstants <- list(f = f,
+                      n.occasions = dim(rch)[2],
+                      nind = dim(rch)[1],
+                      ngroup = 5,
+                      group = sample(1:5, 500, replace = T))
+
+
+testinits <- function() {list(r = rbeta(2, 1, 3), 
+                              p = rbeta(2, 1, 1),
+                              z = z_init_jgs)}  
+
+
+testmodel <- nimbleMCMC(code = testcode4,
+                        data = testdata,
+                        constants = testconstants,
+                        inits = testinits,
+                        nchains = 2, 
+                        niter = 50000,
+                        monitors = c("s", "p", "r", "success"),
+                        summary = TRUE)
+
+
+MCMCsummary(testmodel$samples, 
+            #HPD = TRUE, 
+            #hpd_prob = 0.8,
+            round = 3)
+
+
+MCMCtrace(object = testmodel$samples,
+          pdf = F,
+          params = "s",
+          ind = T)
+
+
+```
+## NIMBLE: testcode5 random effects on survival
+
+```{r}
+
+testcode5 <- nimbleCode({
+  
+# Priors and constraints
+
+
+# Survival priors by stage and group membership
+  
+for (i in 1:nind) { 
+  
+  for (t in f[i]:(n.occasions - 1)) {
+  
+    logit(s[i,t]) <- s.mean[t] + s.re[group[i],t]
+
+    }
+
+}  
+  
+  
+s.mean[1:5] ~ dbeta(1, 1)
+  s.eps[t] <- dnorm(0, g.sd[t])
+  g.sd[t] ~ dunif(0, 5)
+
+# Detection and recovery priors for two intervals 
+# other intervals have constant values, defined below
+  
+for (t in 1:2) {
+  
+  p[t] ~ dbeta(1, 1)
+  r[t] ~ dbeta(1, 3)
+  
+}
+
+# Define state-transition and observation matrices 
+  
+for (i in 1:nind) {
+  
+   for (t in 1:(n.occasions-1)) {
+      
+      # Define probabilities of state S(t+1) given S(t)
+
+      ps[1,i,t,1] <- s[i,t]
+      ps[2,i,t,1] <- 0
+      ps[2,i,t,2] <- 0
+      ps[2,i,t,3] <- 1
+      ps[3,i,t,1] <- 0
+      ps[3,i,t,2] <- 0
+      ps[3,i,t,3] <- 1
+
+      # Define probabilities of O(t) given S(t)
+
+      po[1,i,t,2] <- 0
+      po[2,i,t,1] <- 0
+      po[2,i,t,2] <- 1
+      po[2,i,t,3] <- 0
+      po[3,i,t,1] <- 0
+      po[3,i,t,2] <- 0
+      po[3,i,t,3] <- 1
+      
+      } 
+      
+    # fix recovery parameters
+  
+    rfix <- 0
+    
+    for (t in 1:2) {
+      
+      ps[1,i,t,2] <- 1-s[i,t] * rfix
+      ps[1,i,t,3] <- 1-s[i,t] * (1-rfix)
+      
+      }  
+     
+    for (t in 3:4) {
+      
+      ps[1,i,t,2] <- (1-s[i,t]) * r[t-2]
+      ps[1,i,t,3] <- (1-s[i,t]) * (1-r[t-2])
+      
+      } 
+  
+    # fix detection parameters
+    
+    for (t in 2:3) {
+      
+      po[1,i,t,1] <- p[t-1]
+      po[1,i,t,3] <- 1-p[t-1]
+      
+      }
+    
+    po[1,i,1,1] <- 1
+    po[1,i,4,1] <- 1
+    po[1,i,1,3] <- 0 
+    po[1,i,4,3] <- 0 
+
+}
+  
+  # Likelihood 
+    
+  for (i in 1:nind) {
+
+   # Define latent state at first capture
+    
+   z[i,f[i]] <- y[i,f[i]]
+   
+   for (t in (f[i]+1):n.occasions) {
+   
+      # State process: draw S(t) given S(t-1)
+     
+      z[i,t] ~ dcat(ps[z[i,t-1], i, t-1, 1:3])
+      
+      # Observation process: draw O(t) given S(t)
+     
+      y[i,t] ~ dcat(po[z[i,t], i, t-1, 1:3])
+      
+      } #t
+   
+    } #i
+    
+  
+  for (g in 1:ngroup) {
+    
+    success[g] <- s[g,1] * s[g,2] * s[g,3] * s[g,4]
+    
+  }
+  
+})
+
+```
+
+## NIMBLE: run testcode4
+
+```{r}
+
+testdata <- list(y = rch,
+                 z = z_known_jgs)
+
+
+testconstants <- list(f = f,
+                      n.occasions = dim(rch)[2],
+                      nind = dim(rch)[1],
+                      ngroup = 5,
+                      group = sample(1:5, 500, replace = T))
+
+
+testinits <- function() {list(r = rbeta(2, 1, 3), 
+                              p = rbeta(2, 1, 1),
+                              z = z_init_jgs)}  
+
+
+testmodel <- nimbleMCMC(code = testcode4,
+                        data = testdata,
+                        constants = testconstants,
+                        inits = testinits,
+                        nchains = 2, 
+                        niter = 50000,
+                        monitors = c("s", "p", "r", "success"),
+                        summary = TRUE)
+
+
+MCMCsummary(testmodel$samples, 
+            #HPD = TRUE, 
+            #hpd_prob = 0.8,
+            round = 3)
+
+
+MCMCtrace(object = testmodel$samples,
+          pdf = F,
+          params = "s",
+          ind = T)
+
+
+```
+
 
 ```{r}
 
