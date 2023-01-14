@@ -1089,7 +1089,7 @@ jagsUI::traceplot(lifedead.t)
 
 s <- c(0.95, 0.85, 0.75, 0.85)
 r <- c(0, 0, 0.2, 0.2)
-p <- c(1, 0.8, 0.8, 1)
+p <- c(1, 0.7, 0.7, 1)
 
 n.occasions <- 5  
 n.states <- 3
@@ -1703,6 +1703,7 @@ testconstants <- list(f = f,
 
 testinits <- function() {list(r = rbeta(2, 1, 3), 
                               p = rbeta(2, 1, 1),
+                              #s[1:4,1:5] = rbeta(20, 1, 1),
                               z = z_init_jgs)}  
 
 
@@ -2100,8 +2101,7 @@ testmodel <- nimbleMCMC(code = testcode6,
                         inits = testinits,
                         nchains = 3, 
                         niter = 50000,
-                        monitors = c("s.mean", "p.m", "r.m", "success"),
-                        summary = TRUE)
+                        monitors = c("s.mean", "p.m", "r.m", "success"))
 
 
 MCMCsummary(testmodel$samples, 
@@ -2265,7 +2265,7 @@ for (i in 1:nind) {
 
 ```
 
-## NIMBLE: run testcode6
+## NIMBLE: run testcode7
 
 ```{r}
 
@@ -2295,21 +2295,29 @@ testmodel <- nimbleMCMC(code = testcode7,
                         inits = testinits,
                         nchains = 3, 
                         niter = 50000,
-                        monitors = c("s.int", "beta", "p.m", "r.m", "success"),
-                        summary = TRUE)
+                        monitors = c("s.int", "beta", "p.m", "r.m", "success"))
 
 
-MCMCsummary(testmodel$samples, 
+MCMCsummary(testmodel, 
             #HPD = TRUE, 
             #hpd_prob = 0.8,
             round = 3)
 
 
-MCMCtrace(object = testmodel$samples,
+MCMCtrace(object = testmodel,
           #gvals = c(0.95, 0.85, 0.75, 0.85),
           params = "success",
-          #ind = T,
+          ind = T,
           pdf = F)
 
 
+initializeModel(testmodel)
+
+```
+
+```{r}
+
+x <- rt_nonstandard(50, df = 1, mu = 5, sigma = 1)
+y <- dt_nonstandard(seq(0,10,0.01), 1, 5, 0.25)
+plot(y)
 ```
